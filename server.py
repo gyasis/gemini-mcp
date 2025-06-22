@@ -1,155 +1,57 @@
 #!/usr/bin/env python3
 """
-Claude-Gemini MCP Server
-Enables Claude Code to collaborate with Google's Gemini AI
+Gemini MCP Server v3.0.0
+Enables a primary AI assistant to collaborate with Google's Gemini AI using the modern unified Google Gen AI SDK
 """
 
-import json
-import sys
 import os
-from typing import Dict, Any, Optional
+from typing import Optional, List
+from pathlib import Path
+from dotenv import load_dotenv
+from mcp.server.fastmcp import FastMCP
 
-# Ensure unbuffered output
-sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
-sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
+# Build an absolute path to the .env file
+# This ensures it's found regardless of the script's working directory
+env_path = Path(__file__).parent / '.env'
+load_dotenv(dotenv_path=env_path)
 
 # Server version
-__version__ = "1.0.0"
+__version__ = "3.0.0"
 
-# Initialize Gemini
+# Initialize MCP server
+mcp = FastMCP("Gemini MCP Server", version=__version__)
+
+# Initialize Gemini with new unified SDK
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types
     
-    # Get API key from environment or use the one provided during setup
-    API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
-    if API_KEY == "YOUR_API_KEY_HERE":
-        print(json.dumps({
-            "jsonrpc": "2.0",
-            "error": {
-                "code": -32603,
-                "message": "Please set your Gemini API key in the server.py file or GEMINI_API_KEY environment variable"
-            }
-        }), file=sys.stdout, flush=True)
-        sys.exit(1)
-    
-    genai.configure(api_key=API_KEY)
-    model = genai.GenerativeModel('gemini-2.0-flash')
-    GEMINI_AVAILABLE = True
+    # Get API key from environment
+    API_KEY = os.environ.get("GEMINI_API_KEY")
+    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
+        GEMINI_AVAILABLE = False
+        GEMINI_ERROR = "GEMINI_API_KEY not set in environment or .env file"
+        client = None
+    else:
+        # Initialize the modern client
+        client = genai.Client(api_key=API_KEY)
+        GEMINI_AVAILABLE = True
+        GEMINI_ERROR = None
 except Exception as e:
     GEMINI_AVAILABLE = False
     GEMINI_ERROR = str(e)
+    client = None
 
-def send_response(response: Dict[str, Any]):
-    """Send a JSON-RPC response"""
-    print(json.dumps(response), flush=True)
-
-def handle_initialize(request_id: Any) -> Dict[str, Any]:
-    """Handle initialization"""
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": {
-            "protocolVersion": "2024-11-05",
-            "capabilities": {
-                "tools": {}
-            },
-            "serverInfo": {
-                "name": "claude-gemini-mcp",
-                "version": __version__
-            }
-        }
-    }
-
-def handle_tools_list(request_id: Any) -> Dict[str, Any]:
-    """List available tools"""
-    tools = []
+def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-2.0-flash-001") -> str:
+    """Call Gemini using the new unified SDK and return response"""
+    if not GEMINI_AVAILABLE or not client:
+        return f"Gemini not available: {GEMINI_ERROR}"
     
-    if GEMINI_AVAILABLE:
-        tools = [
-            {
-                "name": "ask_gemini",
-                "description": "Ask Gemini a question and get the response directly in Claude's context",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "prompt": {
-                            "type": "string",
-                            "description": "The question or prompt for Gemini"
-                        },
-                        "temperature": {
-                            "type": "number",
-                            "description": "Temperature for response (0.0-1.0)",
-                            "default": 0.5
-                        }
-                    },
-                    "required": ["prompt"]
-                }
-            },
-            {
-                "name": "gemini_code_review",
-                "description": "Have Gemini review code and return feedback directly to Claude",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "The code to review"
-                        },
-                        "focus": {
-                            "type": "string",
-                            "description": "Specific focus area (security, performance, etc.)",
-                            "default": "general"
-                        }
-                    },
-                    "required": ["code"]
-                }
-            },
-            {
-                "name": "gemini_brainstorm",
-                "description": "Brainstorm solutions with Gemini, response visible to Claude",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "topic": {
-                            "type": "string",
-                            "description": "The topic to brainstorm about"
-                        },
-                        "context": {
-                            "type": "string",
-                            "description": "Additional context",
-                            "default": ""
-                        }
-                    },
-                    "required": ["topic"]
-                }
-            }
-        ]
-    else:
-        tools = [
-            {
-                "name": "server_info",
-                "description": "Get server status and error information",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            }
-        ]
-    
-    return {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "result": {
-            "tools": tools
-        }
-    }
-
-def call_gemini(prompt: str, temperature: float = 0.5) -> str:
-    """Call Gemini and return response"""
     try:
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 temperature=temperature,
                 max_output_tokens=8192,
             )
@@ -158,35 +60,28 @@ def call_gemini(prompt: str, temperature: float = 0.5) -> str:
     except Exception as e:
         return f"Error calling Gemini: {str(e)}"
 
-def handle_tool_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle tool execution"""
-    tool_name = params.get("name")
-    arguments = params.get("arguments", {})
+@mcp.tool()
+def ask_gemini(prompt: str, temperature: float = 0.5) -> str:
+    """Ask Gemini a question and get the response directly in the assistant's context
     
-    try:
-        result = ""
-        
-        if tool_name == "server_info":
-            if GEMINI_AVAILABLE:
-                result = f"Server v{__version__} - Gemini connected and ready!"
-            else:
-                result = f"Server v{__version__} - Gemini error: {GEMINI_ERROR}"
-        
-        elif tool_name == "ask_gemini":
-            if not GEMINI_AVAILABLE:
-                result = f"Gemini not available: {GEMINI_ERROR}"
-            else:
-                prompt = arguments.get("prompt", "")
-                temperature = arguments.get("temperature", 0.5)
-                result = call_gemini(prompt, temperature)
-            
-        elif tool_name == "gemini_code_review":
-            if not GEMINI_AVAILABLE:
-                result = f"Gemini not available: {GEMINI_ERROR}"
-            else:
-                code = arguments.get("code", "")
-                focus = arguments.get("focus", "general")
-                prompt = f"""Please review this code with a focus on {focus}:
+    Args:
+        prompt: The question or prompt for Gemini
+        temperature: Temperature for response (0.0-1.0, default: 0.5)
+    """
+    result = call_gemini(prompt, temperature)
+    return f"🤖 GEMINI RESPONSE:\n\n{result}"
+
+@mcp.tool()
+def gemini_code_review(code: str, focus_areas: Optional[List[str]] = None) -> str:
+    """Have Gemini review code and return feedback directly to the assistant
+    
+    Args:
+        code: The code to review
+        focus_areas: Specific focus areas (e.g., ["security", "performance", "readability", "best practices", "bugs"])
+    """
+    focus = ", ".join(focus_areas) if focus_areas else "general code quality"
+    
+    prompt = f"""Please review this code with a focus on {focus}:
 
 ```
 {code}
@@ -194,94 +89,116 @@ def handle_tool_call(request_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
 
 Provide specific, actionable feedback on:
 1. Potential issues or bugs
-2. Security concerns
+2. Security concerns (if applicable)
 3. Performance optimizations
 4. Best practices
-5. Code clarity and maintainability"""
-                result = call_gemini(prompt, 0.2)
-            
-        elif tool_name == "gemini_brainstorm":
-            if not GEMINI_AVAILABLE:
-                result = f"Gemini not available: {GEMINI_ERROR}"
-            else:
-                topic = arguments.get("topic", "")
-                context = arguments.get("context", "")
-                prompt = f"Let's brainstorm about: {topic}"
-                if context:
-                    prompt += f"\n\nContext: {context}"
-                prompt += "\n\nProvide creative ideas, alternatives, and considerations."
-                result = call_gemini(prompt, 0.7)
-            
-        else:
-            raise ValueError(f"Unknown tool: {tool_name}")
-        
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": f"🤖 GEMINI RESPONSE:\n\n{result}"
-                    }
-                ]
-            }
-        }
-    except Exception as e:
-        return {
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {
-                "code": -32603,
-                "message": str(e)
-            }
-        }
+5. Code clarity and maintainability
 
-def main():
-    """Main server loop"""
-    while True:
-        try:
-            line = sys.stdin.readline()
-            if not line:
-                break
-            
-            request = json.loads(line.strip())
-            method = request.get("method")
-            request_id = request.get("id")
-            params = request.get("params", {})
-            
-            if method == "initialize":
-                response = handle_initialize(request_id)
-            elif method == "tools/list":
-                response = handle_tools_list(request_id)
-            elif method == "tools/call":
-                response = handle_tool_call(request_id, params)
-            else:
-                response = {
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32601,
-                        "message": f"Method not found: {method}"
-                    }
-                }
-            
-            send_response(response)
-            
-        except json.JSONDecodeError:
-            continue
-        except EOFError:
-            break
-        except Exception as e:
-            if 'request_id' in locals():
-                send_response({
-                    "jsonrpc": "2.0",
-                    "id": request_id,
-                    "error": {
-                        "code": -32603,
-                        "message": f"Internal error: {str(e)}"
-                    }
-                })
+Please be thorough but concise in your analysis."""
+    
+    result = call_gemini(prompt, 0.2)  # Lower temperature for analytical tasks
+    return f"🤖 GEMINI RESPONSE:\n\n{result}"
+
+@mcp.tool()
+def gemini_brainstorm(topic: str, context: str = "") -> str:
+    """Brainstorm solutions with Gemini, response visible to the assistant
+    
+    Args:
+        topic: The topic to brainstorm about
+        context: Additional context to guide the brainstorming
+    """
+    prompt = f"Let's brainstorm about: {topic}"
+    if context:
+        prompt += f"\n\nContext: {context}"
+    prompt += "\n\nProvide creative ideas, alternatives, and considerations. Think outside the box and offer innovative solutions."
+    
+    result = call_gemini(prompt, 0.7)  # Higher temperature for creativity
+    return f"🤖 GEMINI RESPONSE:\n\n{result}"
+
+@mcp.tool()
+def gemini_debug(error_message: str, code_snippet: str = "", context: str = "") -> str:
+    """Analyze an error message and code context to find the root cause and suggest a fix
+    
+    Args:
+        error_message: The full error message, including stack trace
+        code_snippet: The relevant code snippet that is causing the error
+        context: Additional context about when/how the error occurs
+    """
+    prompt = f"""I'm encountering a programming error and need help debugging.
+
+Error Message:
+---
+{error_message}
+---"""
+
+    if code_snippet:
+        prompt += f"""
+
+Code Snippet:
+---
+{code_snippet}
+---"""
+
+    if context:
+        prompt += f"""
+
+Additional Context:
+---
+{context}
+---"""
+
+    prompt += """
+
+Based on the error message and the provided information, please do the following:
+1. **Analyze the Root Cause**: Explain what you believe is the most likely cause of this error.
+2. **Identify the Problematic Code**: Pinpoint the specific line(s) or code block(s) that are causing the issue.
+3. **Suggest a Solution**: Provide a corrected version of the code or clear, step-by-step instructions on how to fix the bug.
+4. **Prevention**: Suggest how to prevent similar errors in the future."""
+    
+    result = call_gemini(prompt, 0.2)  # Lower temperature for systematic analysis
+    return f"🤖 GEMINI RESPONSE:\n\n{result}"
+
+@mcp.tool()
+def gemini_research(topic: str) -> str:
+    """
+    Ask Gemini a question and get a response grounded with Google Search results.
+    This tool uses the new unified SDK with proper grounding support.
+    
+    Args:
+        topic: The topic to research using Google Search grounding
+    """
+    if not GEMINI_AVAILABLE or not client:
+        return f"Gemini not available: {GEMINI_ERROR}"
+    
+    try:
+        # Use the new SDK grounding functionality
+        # Note: Grounding may require specific model and API access
+        grounding_tool = types.Tool(
+            google_search=types.GoogleSearch()
+        )
+        
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-001",  # Model that supports grounding
+            contents=topic,
+            config=types.GenerateContentConfig(
+                tools=[grounding_tool],
+                temperature=0.3,  # Lower temperature for factual research
+            )
+        )
+        
+        return f"🤖 GEMINI RESEARCH RESPONSE:\n\n{response.text}"
+    except Exception as e:
+        # Fallback to regular content generation if grounding fails
+        result = call_gemini(f"Research and provide current information about: {topic}", 0.3)
+        return f"🤖 GEMINI RESEARCH RESPONSE (fallback):\n\n{result}\n\n[Note: Used fallback mode - grounding may not be available]"
+
+@mcp.tool()
+def server_info() -> str:
+    """Get server status and error information"""
+    if GEMINI_AVAILABLE:
+        return f"🤖 GEMINI RESPONSE:\n\nServer v{__version__} - Gemini connected and ready! Using modern unified Google Gen AI SDK."
+    else:
+        return f"🤖 GEMINI RESPONSE:\n\nServer v{__version__} - Gemini error: {GEMINI_ERROR}"
 
 if __name__ == "__main__":
-    main()
+    mcp.run()
