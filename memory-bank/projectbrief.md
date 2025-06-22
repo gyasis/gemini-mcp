@@ -15,7 +15,7 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 - Provide seamless Gemini AI integration for MCP-compatible clients
 - Enable collaborative AI workflows between different AI models
 - Maintain type-safe, reliable tool interfaces
-- Support multiple Gemini interaction patterns (Q&A, code review, brainstorming, debugging, research)
+- Support multiple Gemini interaction patterns (Q&A, code review, brainstorming, debugging, web research)
 
 ### Target Users
 - AI developers building multi-model workflows
@@ -24,26 +24,29 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 
 ### Success Criteria
 - :white_check_mark: Working MCP server with Gemini integration
-- :white_check_mark: Four core tools implemented (ask, code review, brainstorm, debug)
+- :white_check_mark: Five core tools implemented (ask, code review, brainstorm, debug, research)
 - :white_check_mark: Official Anthropic MCP SDK integration
+- :white_check_mark: Modern Google Gen AI SDK (v3.0.0) migration completed
 - :white_check_mark: Proper error handling and graceful degradation
-- :white_check_mark: Comprehensive documentation
-- :white_large_square: Easy setup and configuration process
+- :white_check_mark: Comprehensive documentation and Memory Bank system
+- :white_check_mark: Easy setup and configuration process
 
 ## Technical Constraints
 - Must use official Anthropic MCP SDK (v0.5.0+)
+- Must use modern Google Gen AI SDK (google-genai>=0.3.0)
 - Requires valid Gemini API key for operation
-- Python 3.8+ compatibility
+- Python 3.12+ compatibility
 - Minimal dependencies for easy deployment
 
 ## Project Scope
 
 ### In Scope
 - Core MCP server implementation
-- Four primary Gemini tools
+- Five primary Gemini tools (including web research with grounding)
 - Configuration management
 - Error handling and logging
 - Setup automation scripts
+- Memory Bank documentation system
 
 ### Out of Scope
 - GUI/web interface
@@ -53,18 +56,21 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 - Custom model hosting
 
 ## Key Deliverables
-1. Functional MCP server (`server.py`)
+1. Functional MCP server (`server.py`) with modern SDK
 2. Configuration generation script (`generate_config.sh`)
 3. Environment setup documentation
-4. Tool usage examples
+4. Tool usage examples and LLM interaction guide
 5. Error handling patterns
+6. Memory Bank documentation system
+7. Modern dependency management (uv + pyproject.toml)
 
 ## Risk Mitigation
 - **API Key Security**: Environment-based configuration, no hardcoded keys
 - **Service Availability**: Graceful degradation when Gemini API unavailable
-- **Version Compatibility**: Pin to specific MCP SDK versions
+- **Version Compatibility**: Pin to specific MCP SDK and Google Gen AI SDK versions
 - **Setup Complexity**: Automated configuration generation
 
 ## Project Status
-**Current Phase**: Maintenance and Documentation
-**Version**: 2.0.0 (Major refactor to official MCP SDK completed)
+**Current Phase**: Production Ready
+**Version**: 3.0.0 (Major SDK migration to Google Gen AI SDK completed)
+**Last Major Update**: Complete migration from deprecated google-generativeai to unified google-genai SDK

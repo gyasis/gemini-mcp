@@ -9,10 +9,12 @@ tags: []
 ## Technology Stack
 
 ### Core Dependencies
-- **Python 3.8+**: Runtime environment
+- **Python 3.12+**: Runtime environment (upgraded for modern features)
 - **mcp (>=0.5.0)**: Official Anthropic MCP SDK
-- **google-generativeai (>=0.8.5)**: Gemini API client. **Note**: The `gemini_research` tool requires a more recent version that supports tool usage (grounding).
+- **google-genai (>=0.3.0)**: Modern unified Google Gen AI SDK (replaces deprecated google-generativeai)
 - **python-dotenv (>=0.21.0)**: Environment variable management
+- **grpcio (>=1.62.0,<1.70.0)**: gRPC runtime (version constrained for compatibility)
+- **grpcio-status (>=1.62.0,<1.70.0)**: gRPC status handling
 
 ### Development Tools
 - **uv**: Modern Python package manager and runtime

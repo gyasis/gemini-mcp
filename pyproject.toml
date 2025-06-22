@@ -8,4 +8,6 @@ dependencies = [
     "google-genai>=0.3.0",
     "mcp[cli]>=1.9.4",
     "python-dotenv>=1.1.0",
+    "grpcio>=1.62.0,<1.70.0",
+    "grpcio-status>=1.62.0,<1.70.0",
 ]
