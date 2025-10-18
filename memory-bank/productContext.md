@@ -79,11 +79,32 @@ This MCP server bridges the gap by exposing Google's Gemini Pro model through th
 - Solution recommendations
 - Step-by-step debugging guidance
 
+#### Research with Grounding (`gemini_research`)
+- Current information with Google Search
+- Fact-based responses with sources
+- Real-time data and events
+- Reduced hallucination risk
+
+#### Video Analysis (`watch_video`)
+- YouTube video analysis without downloading
+- Local video file processing
+- Time-range specific analysis
+- Content extraction and summarization
+
+#### Image Interpretation (`interpret_image`)
+- Analyze images from multiple sources
+- Local file path support (all standard formats)
+- Direct URL support (http/https image links)
+- Base64 data URI support (embedded images)
+- Detailed visual analysis and description
+- Object detection and scene understanding
+
 ## Success Metrics
 
 ### Technical Success
 - Server starts and connects reliably
-- All four tools function correctly
+- All seven tools function correctly
+- Multimodal capabilities work (video and image analysis)
 - Error handling works as expected
 - Client configuration generates properly
 

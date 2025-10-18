@@ -15,6 +15,7 @@ tags: []
 - **python-dotenv (>=0.21.0)**: Environment variable management
 - **grpcio (>=1.62.0,<1.70.0)**: gRPC runtime (version constrained for compatibility)
 - **grpcio-status (>=1.62.0,<1.70.0)**: gRPC status handling
+- **pillow (>=10.0.0)**: Image processing support for video thumbnails
 
 ### Development Tools
 - **uv**: Modern Python package manager and runtime
@@ -114,7 +115,69 @@ uv run python server.py
 
 **Fallback Strategy**: Could switch to stable models if needed
 
-### 4. Error Handling Philosophy
+### 4. Video Processing Architecture (watch_video tool)
+**YouTube URL Support**:
+- Direct URL passing to Gemini (no downloading)
+- Supports public YouTube videos only
+- Time range queries via prompt (e.g., "from 1:00 to 1:30")
+
+**Local File Handling**:
+- Files <20MB: Sent inline as base64
+- Files >20MB: Uploaded via File API, then deleted
+- Supported formats: mp4, mpeg, mov, avi, flv, mpg, webm, wmv, 3gpp
+- Automatic MIME type detection
+
+**Model Selection**: `gemini-2.0-flash-001` for video analysis
+- Optimized for multimodal tasks
+- Supports up to 2 hours of video (standard resolution)
+- Can process 6 hours at low resolution
+
+### 5. Image Processing Architecture (interpret_image tool - v3.3.0)
+**Three Input Methods Supported**:
+
+1. **Local File Paths** (original functionality):
+   - Files <20MB: Sent inline using `types.Part.from_bytes`
+   - Files >20MB: Uploaded via File API using `types.Part.from_uri`
+   - Automatic MIME type detection from file extension
+   - Supported formats: jpg, jpeg, png, gif, webp, bmp
+
+2. **Image URLs** (NEW in v3.3.0):
+   - Direct HTTP/HTTPS image URLs
+   - URL detection via `is_image_url()` helper function
+   - Images downloaded and processed inline
+   - No size limits (downloaded then processed like local files)
+   - Automatic MIME type detection with fallback to image/jpeg
+
+3. **Base64 Data URIs** (NEW in v3.3.0):
+   - Format: `data:image/{type};base64,{encoded_data}`
+   - Detection via `is_base64_image()` helper function
+   - Base64 data decoded and processed inline
+   - MIME type extracted from data URI or defaults to image/jpeg
+
+**Implementation Pattern**:
+```python
+# URL detection
+def is_image_url(path: str) -> bool:
+    return path.startswith(('http://', 'https://'))
+
+# Base64 detection
+def is_base64_image(path: str) -> bool:
+    return path.startswith('data:image/')
+```
+
+**Processing Flow**:
+1. Check input type (URL, base64, or file path)
+2. Download/decode if needed
+3. Determine MIME type
+4. Send inline (<20MB) or via File API (>20MB)
+5. Return Gemini's analysis
+
+**Model Selection**: `gemini-2.0-flash-exp` for image interpretation
+- Optimized for vision tasks
+- Supports high-resolution images
+- Fast processing for real-time use cases
+
+### 6. Error Handling Philosophy
 **Approach**: Graceful degradation
 - Server continues running even if Gemini unavailable
 - Clear error messages without exposing internals

@@ -8,24 +8,28 @@ tags: []
 
 ## Current Status Overview
 
-**Project Version**: 3.0.0  
-**Phase**: Production Ready  
-**Health**: :white_check_mark: Fully Functional  
-**Last Major Update**: Google Gen AI SDK Migration Completed with gRPC Fixes
+**Project Version**: 3.3.0
+**Phase**: Production Ready
+**Health**: :white_check_mark: Fully Functional
+**Last Major Update**: Enhanced interpret_image tool to support URLs and base64-encoded images (in addition to local files)
 
 ## What Works
 
 ### :white_check_mark: Core Functionality
 - **MCP Server**: Fully operational using official Anthropic SDK
-- **Tool Registration**: All four tools registered and discoverable
+- **Tool Registration**: All seven tools registered and discoverable
 - **Gemini Integration**: Successfully connects to Gemini 2.0 Flash model
 - **Error Handling**: Graceful degradation when API unavailable
+- **Multimodal Support**: Video and image analysis capabilities
 
-### :white_check_mark: Four Core Tools
+### :white_check_mark: Seven Core Tools
 1. **ask_gemini**: General Q&A with configurable temperature ✅
 2. **gemini_code_review**: Code analysis with focus areas ✅
 3. **gemini_brainstorm**: Creative ideation and brainstorming ✅
 4. **gemini_debug**: Error analysis and debugging assistance ✅
+5. **gemini_research**: Research with Google Search grounding ✅
+6. **watch_video**: Analyze YouTube videos (by URL) or local video files ✅
+7. **interpret_image**: Analyze images from local files, URLs, or base64 data ✅
 
 ### :white_check_mark: Setup and Configuration
 - **Package Management**: `uv` integration working
@@ -88,6 +92,9 @@ tags: []
 | gemini_code_review | ✅ | :white_large_square: | :white_large_square: |
 | gemini_brainstorm | ✅ | :white_large_square: | :white_large_square: |
 | gemini_debug | ✅ | :white_large_square: | :white_large_square: |
+| gemini_research | ✅ | :white_large_square: | :white_large_square: |
+| watch_video | ✅ | :white_large_square: | :white_large_square: |
+| interpret_image | ✅ | :white_large_square: | :white_large_square: |
 
 ### Integration Status
 | Component | Status | Notes |
@@ -151,9 +158,67 @@ tags: []
 
 ## Project Health Indicators
 
-**Overall Health**: :white_check_mark: Excellent  
-**Code Quality**: :white_check_mark: High (post-refactor)  
-**Documentation**: :hourglass_flowing_sand: Improving (Memory Bank in progress)  
-**Testing**: :warning: Needs Attention (manual only)  
-**User Experience**: :white_check_mark: Good (simple setup)  
+**Overall Health**: :white_check_mark: Excellent
+**Code Quality**: :white_check_mark: High (post-refactor)
+**Documentation**: :hourglass_flowing_sand: Improving (Memory Bank in progress)
+**Testing**: :warning: Needs Attention (manual only)
+**User Experience**: :white_check_mark: Good (simple setup)
 **Maintainability**: :white_check_mark: Excellent (clean architecture)
+
+## Version History (Recent)
+
+### v3.3.0 - interpret_image Enhancement (Current)
+**Focus**: Enhanced image analysis capabilities with URL and base64 support
+
+**Changes**:
+- Added `is_image_url()` helper function for URL detection
+- Added `is_base64_image()` helper function for base64 data URI detection
+- Enhanced `interpret_image()` tool to accept three input types:
+  1. Local file paths (existing functionality)
+  2. Direct image URLs (http/https) - NEW
+  3. Base64-encoded data URIs (data:image/...) - NEW
+- URL images are downloaded and processed inline
+- Base64 images are decoded and processed inline
+- Proper MIME type detection and fallback handling
+- Follows same File API pattern as watch_video (<20MB inline, >20MB via File API)
+
+**Technical Details**:
+- Server.py lines 198-359 modified
+- Uses `types.Part.from_bytes` for inline data
+- Uses `types.Part.from_uri` for large files
+- Comprehensive error handling for all input types
+
+**Status**: ✅ Production ready, syntax validated, awaiting real-world testing
+
+### v3.2.0 - Documentation and Stability
+**Focus**: Memory Bank updates and system refinements
+
+### v3.1.0 - Video Analysis Tool
+**Focus**: Added watch_video tool for YouTube and local video analysis
+
+**Changes**:
+- New tool: watch_video - Analyze YouTube videos or local video files
+- YouTube URL support (direct passing to Gemini)
+- Local file support (<20MB inline, >20MB via File API)
+- Time-range specific queries via prompt
+- Automatic MIME type detection for video formats
+
+### v3.0.0 - Major SDK Migration
+**Focus**: Migrated to unified Google Gen AI SDK v3.0.0
+
+**Changes**:
+- Replaced deprecated `google-generativeai` with modern `google-genai`
+- Fixed gRPC compatibility issues
+- Updated all tool implementations to new SDK
+- Restored grounding functionality with new API
+- Updated dependency management
+
+### v2.0.0 - MCP SDK Adoption
+**Focus**: Complete rewrite using official Anthropic MCP SDK
+
+**Changes**:
+- Migrated from custom JSON-RPC to official MCP SDK
+- Eliminated ~200 lines of boilerplate code
+- Implemented decorator-based tool registration
+- Added automatic schema generation from type hints
+- Improved maintainability and protocol compliance

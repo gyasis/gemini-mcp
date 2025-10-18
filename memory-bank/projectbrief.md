@@ -16,6 +16,7 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 - Enable collaborative AI workflows between different AI models
 - Maintain type-safe, reliable tool interfaces
 - Support multiple Gemini interaction patterns (Q&A, code review, brainstorming, debugging, web research)
+- Deliver multimodal capabilities (video and image analysis)
 
 ### Target Users
 - AI developers building multi-model workflows
@@ -24,9 +25,11 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 
 ### Success Criteria
 - :white_check_mark: Working MCP server with Gemini integration
-- :white_check_mark: Five core tools implemented (ask, code review, brainstorm, debug, research)
+- :white_check_mark: Seven core tools implemented (ask, code review, brainstorm, debug, research, video, image)
 - :white_check_mark: Official Anthropic MCP SDK integration
 - :white_check_mark: Modern Google Gen AI SDK (v3.0.0) migration completed
+- :white_check_mark: Multimodal capabilities (video + image analysis)
+- :white_check_mark: Image tool supports multiple input methods (file, URL, base64)
 - :white_check_mark: Proper error handling and graceful degradation
 - :white_check_mark: Comprehensive documentation and Memory Bank system
 - :white_check_mark: Easy setup and configuration process
@@ -42,7 +45,9 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 
 ### In Scope
 - Core MCP server implementation
-- Five primary Gemini tools (including web research with grounding)
+- Seven primary Gemini tools (including web research with grounding, video analysis, image interpretation)
+- Multimodal capabilities (video and image processing)
+- Multiple image input methods (file paths, URLs, base64 data URIs)
 - Configuration management
 - Error handling and logging
 - Setup automation scripts
@@ -72,5 +77,5 @@ A Model Context Protocol (MCP) server that integrates Google's Gemini Pro AI mod
 
 ## Project Status
 **Current Phase**: Production Ready
-**Version**: 3.0.0 (Major SDK migration to Google Gen AI SDK completed)
-**Last Major Update**: Complete migration from deprecated google-generativeai to unified google-genai SDK
+**Version**: 3.3.0 (Image tool enhancement - URL and base64 support)
+**Last Major Update**: Enhanced interpret_image tool to support URLs and base64-encoded images in addition to local file paths
