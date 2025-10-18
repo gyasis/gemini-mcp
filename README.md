@@ -1,104 +1,128 @@
-# Claude Code + Gemini MCP Server
+# Claude-Gemini MCP Server
+# Gemini MCP Server
 
-Connect Claude Code with Google's Gemini AI for powerful AI collaboration. Ask Gemini questions, get code reviews, and brainstorm ideas - all within Claude Code!
+This project provides a server that implements the Multi-tool Co-pilot Protocol (MCP), enabling a primary AI model to collaborate with Google's Gemini Pro model for enhanced capabilities.
 
-## 🚀 Quick Start (2 minutes)
+It acts as a bridge, allowing a compatible AI assistant to offload specific tasks like asking questions, reviewing code, or brainstorming to Gemini.
 
-### Prerequisites
-- Python 3.8+ installed
-- Claude Code CLI installed
-- Google Gemini API key ([Get one free](https://aistudio.google.com/apikey))
+## Features
 
-### One-Line Install
+- **General MCP Interface**: Implements the MCP protocol for easy integration with any compatible client.
+- **Gemini Integration**: Leverages the power of Google's Gemini model.
+- **Extensible Toolset**: Easily add new tools that call upon Gemini's capabilities.
+- **Lightweight and Fast**: Built with Python, easy to run and deploy.
+
+## Setup and Installation
+
+This project uses `uv` for fast and reliable Python environment and package management.
+
+1.  **Install `uv`**:
+    If you don't have `uv` installed, follow the official installation instructions:
+    ```bash
+    # On macOS and Linux
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+2.  **Configure API Key**:
+    Create a `.env` file in the root of the project and add your Gemini API key:
+    ```
+    GEMINI_API_KEY="YOUR_API_KEY_HERE"
+    ```
+
+## Running the Server
+
+With `uv` installed and your `.env` file created, you can run the server with a single command. `uv` will automatically create a virtual environment and install the dependencies from `requirements.txt` for you.
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/RaiAnsar/claude_code-gemini-mcp/main/install.sh | bash
+uv run python server.py
 ```
 
-### Manual Install
+The server will start and listen for requests from any MCP-compatible client.
 
-1. **Clone this repo:**
-```bash
-git clone https://github.com/RaiAnsar/claude_code-gemini-mcp.git
-cd claude_code-gemini-mcp
-```
+## Development and Testing
 
-2. **Run setup with your API key:**
-```bash
-./setup.sh YOUR_GEMINI_API_KEY
-```
+### Using MCP Dev Server
 
-That's it! 🎉
-
-## 📖 Usage
-
-Start Claude Code anywhere and use these commands:
+For development and testing, you can use the built-in MCP development server:
 
 ```bash
-claude
-
-# Ask Gemini anything
-
-mcp__gemini-collab__ask_gemini
-  prompt: "Explain quantum computing in simple terms"
-
-# Get code reviews
-mcp__gemini-collab__gemini_code_review
-  code: "def auth(u): return u.pwd == 'admin'"
-  focus: "security"
-
-# Brainstorm ideas
-mcp__gemini-collab__gemini_brainstorm
-  topic: "How to scale a web app to 1M users"
-
-Or simply ask claude code to correlate with Gemini, it is not a rocket sciene... (Author's note) 
+# Run the development server
+uv run mcp dev server.py
 ```
 
-## 🛠️ What This Does
+This provides enhanced debugging output and development features.
 
-1. Installs the Google Gemini Python SDK
-2. Sets up an MCP server that bridges Claude Code and Gemini
-3. Configures it globally (works in any directory)
-4. Provides tools for collaboration between Claude and Gemini
+### Testing with MCP Inspector
 
-## 🔧 Available Tools
+The MCP Inspector provides a web-based interface to test your server tools interactively:
 
-- **ask_gemini** - Ask Gemini any question
-- **gemini_code_review** - Get security/performance code reviews
-- **gemini_brainstorm** - Brainstorm ideas and solutions
-
-## 📁 Installation Location
-
-The server is installed at: `~/.claude-mcp-servers/gemini-collab/`
-
-## 🐛 Troubleshooting
-
-**MCP not showing up?**
 ```bash
-# Check if it's installed
-claude mcp list
-
-# Reinstall with global scope
-claude mcp remove gemini-collab
-claude mcp add --scope user gemini-collab python3 ~/.claude-mcp-servers/gemini-collab/server.py
+# Install and run MCP Inspector
+npx @modelcontextprotocol/inspector
 ```
 
-**Connection errors?**
-- Check your API key is valid
-- Ensure Python has `google-generativeai` installed: `pip install google-generativeai`
+Then open the provided URL (usually `http://localhost:6274`) in your browser. You can:
+- Test all available tools
+- View tool schemas and descriptions  
+- Execute tools with custom parameters
+- Monitor server responses in real-time
 
-## 🔑 Update API Key
+To connect your server to the inspector:
+1. In the inspector web interface, add a new server
+2. Use these connection details:
+   - **Command**: `uv`
+   - **Args**: `["run", "python", "server.py"]`
+   - **Working Directory**: `/path/to/your/claude_code-gemini-mcp`
 
-Edit `~/.claude-mcp-servers/gemini-collab/server.py` and replace the API key.
+### Direct Testing
 
-## 🤝 Contributing
+You can also test the server directly:
 
-Pull requests welcome! Please keep it simple and beginner-friendly.
+```bash
+# Test server startup
+uv run python server.py
 
-## 📜 License
+# The server will wait for JSON-RPC input on stdin
+# Press Ctrl+C to exit
+```
 
-MIT - Use freely!
+## Client Integration
 
----
+To integrate this server with an MCP-compatible client, you need to generate a JSON configuration. The included script makes this easy.
 
-Made with ❤️ for the Claude Code community
+Run the script to generate the necessary JSON:
+
+```bash
+./generate_config.sh
+```
+
+This will output a JSON block that you can add to your client's configuration file. The output will look something like this, with the correct absolute paths for your system:
+
+```json
+{
+  "claude_code-gemini-mcp": {
+    "name": "Gemini MCP Server",
+    "description": "A general MCP server for Gemini integration.",
+    "command": "/path/to/your/project/claude_code-gemini-mcp/.venv/bin/python",
+    "args": ["/path/to/your/project/claude_code-gemini-mcp/server.py"],
+    "env": {},
+    "enabled": true
+  }
+}
+```
+
+## How it Works
+
+The server follows the [Multi-tool Co-pilot Protocol (MCP)](https://github.com/sourcegraph/handbook/blob/main/engineering/rfcs/2024-04-22-rfc-1075-mcp-v0.md), a spec for how an AI assistant can talk to tools.
+
+- **`initialize`**: The client starts communication and the server returns its capabilities.
+- **`tools/list`**: The client requests a list of available tools.
+- **`tools/call`**: The client asks the server to run a specific tool with given arguments.
+
+The server currently exposes the following tools to the client:
+- `ask_gemini`: Ask Gemini a direct question.
+- `gemini_code_review`: Get a code review from Gemini.
+- `gemini_brainstorm`: Brainstorm ideas with Gemini.
+- `gemini_debug`: Analyze error messages and suggest fixes.
+- `gemini_research`: Get research with Google Search grounding.
+- `watch_video`: Analyze YouTube videos or local video files.

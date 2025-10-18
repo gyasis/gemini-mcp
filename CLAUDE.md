@@ -38,12 +38,14 @@ This automatically creates a virtual environment and installs dependencies from 
 
 ### Available Tools
 
-The server exposes four main Gemini integration tools:
+The server exposes six main Gemini integration tools:
 
 1. **ask_gemini**: Direct question/answer with configurable temperature
 2. **gemini_code_review**: Code review with focus areas (security, performance, etc.)
 3. **gemini_brainstorm**: Creative brainstorming with context
 4. **gemini_debug**: Error analysis and debugging assistance
+5. **gemini_research**: Research with Google Search grounding
+6. **watch_video**: Analyze YouTube videos (by URL) or local video files
 
 ### Error Handling
 
@@ -59,6 +61,8 @@ The server exposes four main Gemini integration tools:
 
 ## Development Notes
 
+- **Version 3.1.0**: Added watch_video tool for video analysis
+- **Version 3.0.0**: Migrated to unified Google Gen AI SDK
 - **Version 2.0.0**: Refactored to use official MCP SDK
 - Uses FastMCP server for simplified protocol handling
 - @mcp.tool() decorators automatically generate JSON schemas from type hints
@@ -66,6 +70,7 @@ The server exposes four main Gemini integration tools:
 - Uses Gemini 2.0 Flash model with 8192 max output tokens
 - All Gemini responses are prefixed with "🤖 GEMINI RESPONSE:" for clarity
 - Temperature defaults: 0.5 (general), 0.2 (code review/debug), 0.7 (brainstorm)
+- Video processing: YouTube URLs sent directly, local files <20MB inline, >20MB use File API
 
 ## Code Improvements in v2.0.0
 

@@ -40,14 +40,14 @@ fi
 # Generate the configuration JSON
 if [ "$SINGLE_LINE" = true ]; then
   # Compact, single-line output without the top-level key, suitable for piping
-  echo -n "{\"name\":\"Gemini MCP Server\",\"description\":\"A general MCP server for Gemini integration using official MCP SDK.\",\"command\":\"$PYTHON_EXEC\",\"args\":[\"$SERVER_SCRIPT\"],\"cwd\":\"$SCRIPT_DIR\",\"env\":{},\"enabled\":true}"
+  echo -n "{\"name\":\"Gemini MCP Server\",\"description\":\"MCP server for Gemini integration with tools for Q&A, code review, brainstorming, debugging, research, and video analysis.\",\"command\":\"$PYTHON_EXEC\",\"args\":[\"$SERVER_SCRIPT\"],\"cwd\":\"$SCRIPT_DIR\",\"env\":{},\"enabled\":true}"
 else
   # Pretty-printed output for human consumption
   cat << EOF
 {
   "claude_code-gemini-mcp": {
     "name": "Gemini MCP Server",
-    "description": "A general MCP server for Gemini integration using official MCP SDK.",
+    "description": "MCP server for Gemini integration with tools for Q&A, code review, brainstorming, debugging, research, and video analysis.",
     "command": "$PYTHON_EXEC",
     "args": ["$SERVER_SCRIPT"],
     "cwd": "$SCRIPT_DIR",

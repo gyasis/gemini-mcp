@@ -73,12 +73,62 @@ mcp__gemini-collab__ask_gemini
   temperature: 0.8
 ```
 
+## Debugging Example
+
+```bash
+# Get help debugging an error
+mcp__gemini-collab__gemini_debug
+  error_message: |
+    TypeError: cannot concatenate 'str' and 'int' objects
+    File "app.py", line 42, in process_data
+      result = "Total: " + count
+  code_snippet: |
+    def process_data(items):
+        count = len(items)
+        result = "Total: " + count
+        return result
+  context: "This happens when processing user uploads"
+
+# Gemini analyzes the error and suggests fixes
+```
+
+## Research with Google Search
+
+```bash
+# Get up-to-date information with Google Search grounding
+mcp__gemini-collab__gemini_research
+  topic: "Latest developments in quantum computing 2024"
+
+# Gemini provides current information backed by search results
+```
+
+## Video Analysis
+
+```bash
+# Analyze a YouTube video
+mcp__gemini-collab__watch_video
+  input_path: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+  prompt: "Summarize the main points of this video"
+
+# Analyze specific time ranges
+mcp__gemini-collab__watch_video
+  input_path: "https://www.youtube.com/watch?v=example"
+  prompt: "What happens between 2:30 and 5:00?"
+
+# Analyze local video files
+mcp__gemini-collab__watch_video
+  input_path: "/path/to/presentation.mp4"
+  prompt: "Extract all the key slides and their content"
+```
+
 ## Real-World Workflow
 
 1. **Claude writes initial code**
 2. **Gemini reviews for security/performance**
 3. **Claude implements improvements**
-4. **Both AIs brainstorm edge cases**
-5. **Final optimized solution!**
+4. **Gemini helps debug any errors**
+5. **Research current best practices with gemini_research**
+6. **Analyze tutorial videos for additional context**
+7. **Final optimized solution!**
 
 This creates a powerful AI pair programming experience where both models complement each other's strengths.
