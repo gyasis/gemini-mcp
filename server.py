@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gemini MCP Server v3.3.0
+Gemini MCP Server v3.4.0
 Enables a primary AI assistant to collaborate with Google's Gemini AI using the modern unified Google Gen AI SDK
 """
 
@@ -19,7 +19,7 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # Server version
-__version__ = "3.3.0"
+__version__ = "3.4.0"
 
 # Initialize MCP server
 mcp = FastMCP("Gemini MCP Server", version=__version__)
@@ -208,155 +208,163 @@ def is_base64_image(data: str) -> bool:
     return data.startswith("data:image/")
 
 @mcp.tool()
-def interpret_image(image_path: str, prompt: str = "Describe this image in detail", temperature: float = 0.5) -> str:
-    """Analyze and interpret an image file using Gemini Vision
+def interpret_image(
+    image_path: Union[str, List[str]],
+    prompt: str = "Describe this image in detail",
+    temperature: float = 0.5
+) -> str:
+    """Analyze and interpret one or multiple images using Gemini Vision
+
+    Supports up to 3,600 images per request (Gemini API limit).
 
     Args:
-        image_path: Can be one of:
-                   - Local file path (supports jpg, jpeg, png, gif, webp, bmp)
+        image_path: Can be ONE of:
+                   - Single image: str (file path, URL, or base64)
+                   - Multiple images: List[str] (mix of file paths, URLs, and/or base64)
+
+                   Supported formats:
+                   - Local file path (jpg, jpeg, png, gif, webp, bmp)
                    - Direct image URL (http/https)
-                   - Base64-encoded image string (data:image/jpeg;base64,...)
+                   - Base64-encoded image (data:image/jpeg;base64,...)
+
         prompt: Analysis prompt (default: "Describe this image in detail")
+                For multiple images, use prompts like "Compare these images" or
+                "What are the differences between these images?"
+
         temperature: Temperature for response (0.0-1.0, default: 0.5)
 
     Returns:
-        Gemini's interpretation of the image
+        Gemini's interpretation of the image(s)
+
+    Examples:
+        # Single image
+        interpret_image("/path/to/photo.jpg", "What's in this image?")
+
+        # Multiple images for comparison
+        interpret_image(
+            ["/path/to/image1.jpg", "https://example.com/image2.png"],
+            "Compare these two images and describe the differences"
+        )
+
+        # Mix of formats
+        interpret_image(
+            ["/path/to/local.jpg", "data:image/png;base64,iVBOR..."],
+            "Analyze these images"
+        )
     """
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
 
     try:
-        # Handle base64-encoded images
-        if is_base64_image(image_path):
-            # Parse data URI: data:image/jpeg;base64,<base64_data>
-            header, base64_data = image_path.split(',', 1)
-            mime_type = header.split(';')[0].split(':')[1]  # Extract mime type from data:image/jpeg
+        # Normalize input to list (support both single and multiple images)
+        image_paths = [image_path] if isinstance(image_path, str) else image_path
 
-            # Decode base64 to bytes
-            image_data = base64.b64decode(base64_data)
-            file_size_mb = len(image_data) / (1024 * 1024)
+        # Validate image count (Gemini supports up to 3,600 images)
+        if len(image_paths) > 3600:
+            return f"🤖 GEMINI RESPONSE:\n\nError: Too many images ({len(image_paths)}). Maximum is 3,600 images per request."
 
-            # Send to Gemini
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    types.Part.from_bytes(
-                        data=image_data,
-                        mime_type=mime_type
-                    ),
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=8192,
-                )
-            )
+        # Build contents array with all images
+        contents = []
+        image_info = []
+        uploaded_files = []  # Track uploaded files for cleanup
 
-            return f"🤖 GEMINI IMAGE ANALYSIS (Base64, {file_size_mb:.1f}MB):\n\n{response.text}"
+        for idx, img_path in enumerate(image_paths, 1):
+            # Handle base64-encoded images
+            if is_base64_image(img_path):
+                header, base64_data = img_path.split(',', 1)
+                mime_type = header.split(';')[0].split(':')[1]
+                image_data = base64.b64decode(base64_data)
+                file_size_mb = len(image_data) / (1024 * 1024)
 
-        # Handle image URLs (HTTP/HTTPS)
-        if is_image_url(image_path):
-            # For image URLs, we need to download and process them
-            import urllib.request
+                contents.append(types.Part.from_bytes(
+                    data=image_data,
+                    mime_type=mime_type
+                ))
+                image_info.append(f"Image {idx}: Base64 ({file_size_mb:.1f}MB)")
 
-            # Download the image
-            with urllib.request.urlopen(image_path) as url_response:
-                image_data = url_response.read()
+            # Handle image URLs
+            elif is_image_url(img_path):
+                import urllib.request
+                with urllib.request.urlopen(img_path) as url_response:
+                    image_data = url_response.read()
 
-            # Determine MIME type from URL or content
-            mime_type = url_response.headers.get_content_type()
-            if not mime_type or not mime_type.startswith('image/'):
-                # Try to guess from URL
-                mime_type, _ = mimetypes.guess_type(image_path)
-                if not mime_type:
-                    mime_type = 'image/jpeg'  # Default fallback
+                mime_type = url_response.headers.get_content_type()
+                if not mime_type or not mime_type.startswith('image/'):
+                    mime_type, _ = mimetypes.guess_type(img_path)
+                    if not mime_type:
+                        mime_type = 'image/jpeg'
 
-            file_size_mb = len(image_data) / (1024 * 1024)
+                file_size_mb = len(image_data) / (1024 * 1024)
+                contents.append(types.Part.from_bytes(
+                    data=image_data,
+                    mime_type=mime_type
+                ))
+                image_info.append(f"Image {idx}: URL ({file_size_mb:.1f}MB)")
 
-            # For URLs, always use inline data (already downloaded)
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    types.Part.from_bytes(
-                        data=image_data,
-                        mime_type=mime_type
-                    ),
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=8192,
-                )
-            )
+            # Handle local file paths
+            else:
+                if not os.path.exists(img_path):
+                    return f"🤖 GEMINI RESPONSE:\n\nError: Image {idx} not found: '{img_path}'"
 
-            return f"🤖 GEMINI IMAGE ANALYSIS (URL: {image_path}, {file_size_mb:.1f}MB):\n\n{response.text}"
+                file_path = Path(img_path)
+                mime_type, _ = mimetypes.guess_type(str(file_path))
+                if not mime_type or not mime_type.startswith('image/'):
+                    return f"🤖 GEMINI RESPONSE:\n\nError: Image {idx} is not a valid image file: '{img_path}' (detected type: {mime_type})"
 
-        # Handle local file paths
-        if not os.path.exists(image_path):
-            return f"🤖 GEMINI RESPONSE:\n\nError: Image file '{image_path}' not found"
+                file_size = file_path.stat().st_size
+                file_size_mb = file_size / (1024 * 1024)
 
-        file_path = Path(image_path)
+                # For files > 20MB, use File API
+                if file_size_mb > 20:
+                    uploaded_file = client.files.upload(
+                        path=str(file_path),
+                        display_name=file_path.name
+                    )
+                    uploaded_files.append(uploaded_file)
 
-        # Check if it's an image file
-        mime_type, _ = mimetypes.guess_type(str(file_path))
-        if not mime_type or not mime_type.startswith('image/'):
-            return f"🤖 GEMINI RESPONSE:\n\nError: File '{image_path}' is not a valid image file (detected type: {mime_type})"
-
-        # Get file size to determine upload method
-        file_size = file_path.stat().st_size
-        file_size_mb = file_size / (1024 * 1024)
-
-        # For files > 20MB, use the File API
-        if file_size_mb > 20:
-            # Upload the file first
-            uploaded_file = client.files.upload(
-                path=str(file_path),
-                display_name=file_path.name
-            )
-
-            # Generate content with the uploaded file
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    types.Part.from_uri(
+                    contents.append(types.Part.from_uri(
                         file_uri=uploaded_file.uri,
                         mime_type=mime_type
-                    ),
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=8192,
-                )
-            )
+                    ))
+                    image_info.append(f"Image {idx}: {file_path.name} ({file_size_mb:.1f}MB, uploaded)")
+                else:
+                    with open(file_path, 'rb') as f:
+                        image_data = f.read()
 
-            # Clean up the uploaded file
-            client.files.delete(name=uploaded_file.name)
-
-        else:
-            # For smaller files, include inline
-            with open(file_path, 'rb') as f:
-                image_data = f.read()
-
-            response = client.models.generate_content(
-                model="gemini-2.0-flash-001",
-                contents=[
-                    types.Part.from_bytes(
+                    contents.append(types.Part.from_bytes(
                         data=image_data,
                         mime_type=mime_type
-                    ),
-                    prompt
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=temperature,
-                    max_output_tokens=8192,
-                )
-            )
+                    ))
+                    image_info.append(f"Image {idx}: {file_path.name} ({file_size_mb:.1f}MB)")
 
-        return f"🤖 GEMINI IMAGE ANALYSIS ({file_path.name}, {file_size_mb:.1f}MB):\n\n{response.text}"
+        # Add the prompt to contents
+        contents.append(prompt)
+
+        # Send all images to Gemini in one request
+        response = client.models.generate_content(
+            model="gemini-2.0-flash-001",
+            contents=contents,
+            config=types.GenerateContentConfig(
+                temperature=temperature,
+                max_output_tokens=8192,
+            )
+        )
+
+        # Clean up uploaded files
+        for uploaded_file in uploaded_files:
+            client.files.delete(name=uploaded_file.name)
+
+        # Format response
+        image_count = len(image_paths)
+        if image_count == 1:
+            header = f"🤖 GEMINI IMAGE ANALYSIS ({image_info[0].replace('Image 1: ', '')}):"
+        else:
+            header = f"🤖 GEMINI MULTI-IMAGE ANALYSIS ({image_count} images):\n" + "\n".join(f"  • {info}" for info in image_info) + "\n"
+
+        return f"{header}\n\n{response.text}"
 
     except Exception as e:
-        return f"🤖 GEMINI RESPONSE:\n\nError analyzing image: {str(e)}"
+        return f"🤖 GEMINI RESPONSE:\n\nError analyzing image(s): {str(e)}"
 
 @mcp.tool()
 def server_info() -> str:
