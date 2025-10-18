@@ -8,8 +8,10 @@ It acts as a bridge, allowing a compatible AI assistant to offload specific task
 ## Features
 
 - **General MCP Interface**: Implements the MCP protocol for easy integration with any compatible client.
-- **Gemini Integration**: Leverages the power of Google's Gemini model.
+- **Gemini Integration**: Leverages the power of Google's Gemini 2.0 Flash model.
+- **Multi-Image Analysis**: Compare and analyze up to 3,600 images in a single request.
 - **Extensible Toolset**: Easily add new tools that call upon Gemini's capabilities.
+- **Multimodal Support**: Process text, images, and videos through Gemini's multimodal capabilities.
 - **Lightweight and Fast**: Built with Python, easy to run and deploy.
 
 ## Setup and Installation
@@ -126,3 +128,4 @@ The server currently exposes the following tools to the client:
 - `gemini_debug`: Analyze error messages and suggest fixes.
 - `gemini_research`: Get research with Google Search grounding.
 - `watch_video`: Analyze YouTube videos or local video files.
+- `interpret_image`: Analyze one or multiple images (supports up to 3,600 images per request for comparison and batch analysis).
