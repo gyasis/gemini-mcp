@@ -6,13 +6,17 @@ __pycache__/
 .Python
 env/
 venv/
+.venv/
 .env
+.python-version
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
+.history/
+.cursorindexingignore
 
 # OS
 .DS_Store
@@ -21,3 +25,15 @@ Thumbs.db
 # Project specific
 *.log
 .claude/
+.specstory/
+
+# Temporary and test files
+*.json
+!pyproject.json
+watch_video_tool/
+
+# Personal notes and unrelated docs
+*_instructions.md
+*_PRD.md
+gemini_mcp.md
+llm-usage-prompt.md
