@@ -65,22 +65,57 @@ def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-2.0-
 
 @mcp.tool()
 def ask_gemini(prompt: str, temperature: float = 0.5) -> str:
-    """Ask Gemini a question and get the response directly in the assistant's context
-    
+    """Ask Gemini a general question and get a direct response for collaboration between AI assistants.
+
+    Use this tool when you need Gemini's perspective, analysis, or expertise on any topic that doesn't
+    fit the specialized tools below. This is ideal for:
+    - General knowledge questions and explanations
+    - Getting a second opinion on technical decisions or approaches
+    - Exploring alternative viewpoints or methodologies
+    - Discussing best practices, patterns, or architectural choices
+    - Asking about technologies, frameworks, or concepts
+    - Seeking creative solutions to problems
+    - Collaborative problem-solving where two AI perspectives are valuable
+
+    This is the most flexible tool - use it when other specialized tools (code_review, debug,
+    brainstorm, research) don't fit your specific need. Think of this as asking a colleague for
+    their input or expertise.
+
     Args:
-        prompt: The question or prompt for Gemini
-        temperature: Temperature for response (0.0-1.0, default: 0.5)
+        prompt: The question or prompt for Gemini. Be specific and provide context for best results.
+        temperature: Controls randomness in responses (0.0-1.0, default: 0.5).
+                    Lower values (0.2-0.4) = more focused/deterministic responses.
+                    Higher values (0.6-0.8) = more creative/varied responses.
     """
     result = call_gemini(prompt, temperature)
     return f"🤖 GEMINI RESPONSE:\n\n{result}"
 
 @mcp.tool()
 def gemini_code_review(code: str, focus_areas: Optional[List[str]] = None) -> str:
-    """Have Gemini review code and return feedback directly to the assistant
-    
+    """Request a comprehensive code review from Gemini with detailed feedback on quality, security, and best practices.
+
+    Use this tool specifically when you need expert code analysis and review. This is NOT for debugging
+    errors (use gemini_debug for that). Instead, use this when you want to:
+    - Get a thorough code quality assessment before committing or deploying
+    - Identify potential security vulnerabilities (SQL injection, XSS, auth issues, etc.)
+    - Find performance bottlenecks or optimization opportunities
+    - Ensure code follows best practices and design patterns
+    - Improve code readability, maintainability, and documentation
+    - Catch logic bugs, edge cases, or potential runtime issues
+    - Get suggestions for refactoring or architectural improvements
+    - Review code for compliance with coding standards
+
+    Gemini will provide specific, actionable feedback on issues found, explain WHY they're problems,
+    and suggest concrete improvements. The review uses lower temperature (0.2) for consistent,
+    analytical feedback.
+
     Args:
-        code: The code to review
-        focus_areas: Specific focus areas (e.g., ["security", "performance", "readability", "best practices", "bugs"])
+        code: The code snippet or full file to review. Include enough context for meaningful analysis.
+        focus_areas: Optional list to narrow the review scope. Examples:
+                    ["security"] - Focus only on security vulnerabilities
+                    ["performance", "readability"] - Focus on speed and clarity
+                    ["best practices", "bugs"] - Focus on correctness and patterns
+                    If omitted, provides a comprehensive review of all aspects.
     """
     focus = ", ".join(focus_areas) if focus_areas else "general code quality"
     
@@ -104,11 +139,29 @@ Please be thorough but concise in your analysis."""
 
 @mcp.tool()
 def gemini_brainstorm(topic: str, context: str = "") -> str:
-    """Brainstorm solutions with Gemini, response visible to the assistant
-    
+    """Engage Gemini in creative brainstorming to generate innovative ideas, solutions, and alternatives.
+
+    Use this tool when you need creative, out-of-the-box thinking and want to explore multiple
+    approaches or solutions. This is perfect for:
+    - Generating multiple solution approaches to a problem
+    - Exploring architectural options and trade-offs for a new feature
+    - Coming up with creative naming ideas for projects, functions, or variables
+    - Brainstorming test cases, edge cases, or scenarios to consider
+    - Thinking through user experience flows and alternatives
+    - Generating ideas for improving existing systems or workflows
+    - Exploring "what if" scenarios and their implications
+    - Finding creative ways to work around constraints or limitations
+    - Discovering novel approaches to challenging technical problems
+
+    This tool uses higher temperature (0.7) to encourage diverse, creative responses. Gemini will
+    provide multiple alternatives, consider various angles, and think innovatively rather than
+    converging on a single "correct" answer.
+
     Args:
-        topic: The topic to brainstorm about
-        context: Additional context to guide the brainstorming
+        topic: The specific topic or problem to brainstorm about. Be clear about what you need ideas for.
+        context: Additional background information, constraints, or requirements to guide the brainstorming.
+                Include things like: current situation, limitations, goals, preferences, or related context
+                that will help generate more relevant and practical ideas.
     """
     prompt = f"Let's brainstorm about: {topic}"
     if context:
@@ -120,12 +173,33 @@ def gemini_brainstorm(topic: str, context: str = "") -> str:
 
 @mcp.tool()
 def gemini_debug(error_message: str, code_snippet: str = "", context: str = "") -> str:
-    """Analyze an error message and code context to find the root cause and suggest a fix
-    
+    """Get expert debugging assistance from Gemini to diagnose errors, find root causes, and get fix recommendations.
+
+    Use this tool specifically when you encounter runtime errors, exceptions, or unexpected behavior
+    that needs diagnosis. This is NOT for code review (use gemini_code_review for that). Use this when:
+    - You have an error message or exception that needs analysis
+    - Your code is failing and you need to identify the root cause
+    - You're getting unexpected behavior and need help diagnosing why
+    - Stack traces are confusing and you need help interpreting them
+    - You need step-by-step guidance on fixing a specific bug
+    - You want to understand WHY an error is occurring, not just how to fix it
+    - You're stuck debugging and need a fresh perspective on the problem
+
+    Gemini will systematically analyze the error, identify the root cause, pinpoint the problematic
+    code, provide a fix, and suggest preventive measures. Uses lower temperature (0.2) for precise,
+    analytical debugging.
+
     Args:
-        error_message: The full error message, including stack trace
-        code_snippet: The relevant code snippet that is causing the error
-        context: Additional context about when/how the error occurs
+        error_message: The complete error message, exception, or stack trace. Include ALL details:
+                      exception type, message, line numbers, and full stack trace if available.
+        code_snippet: The relevant code that's causing the error. Include surrounding context (5-10 lines
+                     before/after) so Gemini can understand how the code is being used.
+        context: Additional details about the error situation:
+                - When does the error occur? (startup, specific user action, certain inputs)
+                - What were you trying to do when it failed?
+                - What have you already tried?
+                - Any relevant environment details (OS, versions, configuration)
+                - Does it happen consistently or intermittently?
     """
     prompt = f"""I'm encountering a programming error and need help debugging.
 
@@ -163,12 +237,31 @@ Based on the error message and the provided information, please do the following
 
 @mcp.tool()
 def gemini_research(topic: str) -> str:
-    """
-    Ask Gemini a question and get a response grounded with Google Search results.
-    This tool uses the new unified SDK with proper grounding support.
-    
+    """Conduct fact-based research using Gemini with Google Search grounding for current, verified information.
+
+    Use this tool when you need factual, up-to-date information that's grounded in real-world sources.
+    This is NOT for general questions (use ask_gemini) or creative brainstorming. Use this when you need:
+    - Current information about recent events, technologies, or developments
+    - Factual research on specific topics, products, or technologies
+    - Verification of claims or statements with web sources
+    - Information about latest versions, releases, or updates
+    - Market research, trends, or industry analysis
+    - Documentation or specifications that are published online
+    - Comparative analysis of tools, frameworks, or approaches based on real data
+    - Finding examples, case studies, or real-world implementations
+    - Getting information that changes frequently (pricing, features, availability)
+
+    This tool uses Google Search grounding to ensure responses are backed by current web information
+    rather than just training data. Responses will reference real sources when possible. Uses lower
+    temperature (0.3) for factual accuracy.
+
+    IMPORTANT: This requires Gemini's grounding features to be enabled on your API key. If grounding
+    is not available, it will fall back to regular Gemini (still useful, but without live search).
+
     Args:
-        topic: The topic to research using Google Search grounding
+        topic: The specific topic or question to research. Be clear and specific about what information
+              you need. Include relevant context like: technology names, version numbers, timeframes,
+              or specific aspects you're interested in.
     """
     if not GEMINI_AVAILABLE or not client:
         return f"Gemini not available: {GEMINI_ERROR}"
@@ -213,43 +306,76 @@ def interpret_image(
     prompt: str = "Describe this image in detail",
     temperature: float = 0.5
 ) -> str:
-    """Analyze and interpret one or multiple images using Gemini Vision
+    """Analyze and interpret images using Gemini's advanced vision capabilities to understand visual content.
 
-    Supports up to 3,600 images per request (Gemini API limit).
+    Use this tool when you need to extract information from images, understand visual content, or analyze
+    screenshots, diagrams, charts, or photos. Supports single or multiple images (up to 3,600 per request).
+    Perfect for:
+    - Describing what's visible in photos, screenshots, or diagrams
+    - Reading and extracting text from images (OCR functionality)
+    - Analyzing UI/UX designs and providing feedback
+    - Understanding charts, graphs, or data visualizations
+    - Identifying objects, people, or elements in images
+    - Comparing multiple images to find differences or similarities
+    - Analyzing code screenshots or error messages shown visually
+    - Understanding architectural diagrams, flowcharts, or technical drawings
+    - Examining design mockups or wireframes
+    - Analyzing medical images, scientific diagrams, or specialized visuals (within Gemini's capabilities)
+
+    This tool automatically handles different image sources and sizes:
+    - Local files are read directly (files >20MB use file upload API)
+    - URLs are fetched and processed automatically
+    - Base64-encoded images are decoded inline
+    - Multiple images can be analyzed together for comparison or combined analysis
 
     Args:
         image_path: Can be ONE of:
-                   - Single image: str (file path, URL, or base64)
-                   - Multiple images: List[str] (mix of file paths, URLs, and/or base64)
+                   - Single image: str (file path, URL, or base64-encoded)
+                   - Multiple images: List[str] (mix of any supported formats)
 
                    Supported formats:
-                   - Local file path (jpg, jpeg, png, gif, webp, bmp)
-                   - Direct image URL (http/https)
-                   - Base64-encoded image (data:image/jpeg;base64,...)
+                   - Local file path: "/path/to/image.jpg", "./screenshot.png"
+                   - Direct URL: "https://example.com/image.png"
+                   - Base64-encoded: "data:image/jpeg;base64,/9j/4AAQ..."
 
-        prompt: Analysis prompt (default: "Describe this image in detail")
-                For multiple images, use prompts like "Compare these images" or
-                "What are the differences between these images?"
+                   Supported image types: jpg, jpeg, png, gif, webp, bmp
 
-        temperature: Temperature for response (0.0-1.0, default: 0.5)
+        prompt: What you want to know about the image(s). Be specific for best results:
+                Single image examples:
+                - "What text is visible in this screenshot?"
+                - "Describe the architecture shown in this diagram"
+                - "What errors or issues can you identify in this code screenshot?"
+
+                Multiple image examples:
+                - "Compare these two designs and list the differences"
+                - "Which of these UI mockups follows better design principles?"
+                - "Analyze the progression shown across these images"
+
+        temperature: Controls response creativity (0.0-1.0, default: 0.5)
+                    Lower (0.2-0.4) for factual descriptions, OCR, or technical analysis
+                    Higher (0.6-0.8) for creative interpretations or subjective analysis
 
     Returns:
-        Gemini's interpretation of the image(s)
+        Gemini's detailed analysis of the image(s), including descriptions, text extraction,
+        observations, and answers to your specific questions.
 
     Examples:
-        # Single image
-        interpret_image("/path/to/photo.jpg", "What's in this image?")
+        # Analyze a single screenshot
+        interpret_image("/path/to/error.png", "What error is shown and how can I fix it?")
 
-        # Multiple images for comparison
+        # Compare multiple designs
         interpret_image(
-            ["/path/to/image1.jpg", "https://example.com/image2.png"],
-            "Compare these two images and describe the differences"
+            ["/path/to/design_v1.png", "/path/to/design_v2.png"],
+            "Compare these two designs. Which is more user-friendly and why?"
         )
 
-        # Mix of formats
+        # Extract text from an image
+        interpret_image("https://example.com/document.jpg", "Extract all text from this image")
+
+        # Mix of local and remote images
         interpret_image(
-            ["/path/to/local.jpg", "data:image/png;base64,iVBOR..."],
-            "Analyze these images"
+            ["/path/to/local.jpg", "https://example.com/remote.png"],
+            "What are the common themes across these images?"
         )
     """
     if not GEMINI_AVAILABLE or not client:
@@ -368,7 +494,19 @@ def interpret_image(
 
 @mcp.tool()
 def server_info() -> str:
-    """Get server status and error information"""
+    """Check Gemini MCP server status, connectivity, and configuration information.
+
+    Use this tool to verify that the Gemini MCP server is properly configured and operational.
+    This is helpful for:
+    - Diagnosing connection issues with the Gemini API
+    - Checking if the API key is properly configured
+    - Verifying the server version
+    - Troubleshooting when other Gemini tools are not working
+    - Getting basic health check information
+
+    Returns information about server version, Gemini API connectivity, and any error messages
+    if the service is not available.
+    """
     if GEMINI_AVAILABLE:
         return f"🤖 GEMINI RESPONSE:\n\nServer v{__version__} - Gemini connected and ready! Using modern unified Google Gen AI SDK."
     else:
@@ -380,15 +518,58 @@ def is_youtube_url(url: str) -> bool:
 
 @mcp.tool()
 def watch_video(input_path: str, prompt: str, model: str = "gemini-2.0-flash-001") -> str:
-    """Analyze a YouTube video or local video file using Gemini
-    
+    """Analyze video content from YouTube or local files using Gemini's multimodal capabilities.
+
+    Use this tool when you need to understand, analyze, or extract information from video content.
+    Works with both YouTube videos (via URL) and local video files. Perfect for:
+    - Summarizing video content and key points
+    - Extracting specific information from tutorial or educational videos
+    - Analyzing presentations, demos, or conference talks
+    - Understanding what happens in a video without watching it
+    - Transcribing or extracting dialogue from videos
+    - Analyzing specific time ranges or segments of longer videos
+    - Getting insights from recorded meetings, lectures, or screencasts
+    - Identifying actions, objects, or events shown in video footage
+    - Comparing content across different parts of a video
+
+    The tool automatically handles different video sources:
+    - YouTube URLs are processed directly (no download needed)
+    - Local files <20MB are sent inline
+    - Local files >20MB use Gemini's File API for upload
+    - Supports common video formats (mp4, mov, avi, etc.)
+
     Args:
-        input_path: YouTube URL or local video file path
-        prompt: Analysis prompt (can include time ranges like "Summarize from 1:00 to 1:30")
-        model: Gemini model to use (default: gemini-2.0-flash-001)
-    
+        input_path: Video source - either a YouTube URL or path to a local video file:
+                   YouTube examples:
+                   - "https://www.youtube.com/watch?v=VIDEO_ID"
+                   - "https://youtu.be/VIDEO_ID"
+
+                   Local file examples:
+                   - "/path/to/recording.mp4"
+                   - "./screencast.mov"
+
+        prompt: What you want to know about the video. Be specific for best results:
+               General analysis:
+               - "Summarize this video in 3-5 key points"
+               - "What is this video about?"
+               - "List the main topics covered in this video"
+
+               Time-specific analysis:
+               - "Summarize from 1:00 to 1:30"
+               - "What happens at the 5-minute mark?"
+               - "Describe the section between 2:30 and 4:00"
+
+               Specific information extraction:
+               - "What code examples are shown in this tutorial?"
+               - "List all the commands demonstrated in this video"
+               - "What are the speaker's main arguments?"
+
+        model: Gemini model to use (default: gemini-2.0-flash-001). The default model supports
+              video analysis. Use this parameter only if you need a different model variant.
+
     Returns:
-        Gemini's analysis of the video content
+        Gemini's detailed analysis of the video content, including summaries, transcriptions,
+        observations, and answers to your specific questions about the video.
     """
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
