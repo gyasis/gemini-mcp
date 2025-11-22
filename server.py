@@ -9,7 +9,7 @@ import base64
 from typing import Optional, List, Union
 from pathlib import Path
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 import mimetypes
 import tempfile
 
