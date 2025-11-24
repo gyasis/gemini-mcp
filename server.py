@@ -443,8 +443,8 @@ def interpret_image(
                 # For files > 20MB, use File API
                 if file_size_mb > 20:
                     uploaded_file = client.files.upload(
-                        path=str(file_path),
-                        display_name=file_path.name
+                        file=str(file_path),
+                        config=types.UploadFileConfig(display_name=file_path.name)
                     )
                     uploaded_files.append(uploaded_file)
 
@@ -606,11 +606,10 @@ def watch_video(input_path: str, prompt: str, model: str = "gemini-2.0-flash-001
             # For files > 20MB, use the File API
             if file_size_mb > 20:
                 # Upload the file first
-                with open(file_path, 'rb') as f:
-                    uploaded_file = client.files.upload(
-                        path=str(file_path),
-                        display_name=file_path.name
-                    )
+                uploaded_file = client.files.upload(
+                    file=str(file_path),
+                    config=types.UploadFileConfig(display_name=file_path.name)
+                )
                 
                 # Wait for file to be processed
                 file_obj = uploaded_file
