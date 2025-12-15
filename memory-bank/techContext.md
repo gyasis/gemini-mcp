@@ -17,6 +17,12 @@ tags: []
 - **grpcio-status (>=1.62.0,<1.70.0)**: gRPC status handling
 - **pillow (>=10.0.0)**: Image processing support for video thumbnails
 
+### Deep Research System Dependencies (v3.6.0+)
+- **notify-py (>=0.3.42)**: Cross-platform desktop notifications (optional, with fallback)
+- **Jinja2 (>=3.1.0)**: Markdown report template rendering
+- **sqlite3**: SQLite database (Python stdlib - no external dependency)
+- **asyncio**: Asynchronous task management (Python stdlib - no external dependency)
+
 ### Development Tools
 - **uv**: Modern Python package manager and runtime
 - **pyproject.toml**: Project metadata and dependency specification

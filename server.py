@@ -8,7 +8,9 @@ import os
 import base64
 import asyncio
 import logging
-from typing import Optional, List, Union
+import uuid
+import json
+from typing import Optional, List, Union, Dict, Any
 from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
@@ -205,6 +207,350 @@ def on_server_startup():
 
 # Run startup recovery when module loads
 on_server_startup()
+
+# ============================================================================
+# Deep Research Tools (Wave 4-5: US1 MVP)
+# ============================================================================
+
+@mcp.tool()
+async def start_deep_research(
+    query: str,
+    enable_notifications: bool = True,
+    max_wait_hours: int = 8,
+    model: str = "gemini-2.0-flash-thinking-exp"
+) -> Dict[str, Any]:
+    """Start a deep research task using Gemini Deep Research API.
+
+    Gemini Deep Research natively handles multi-hop reasoning, automatic
+    query refinement, and source synthesis. This tool wraps that capability
+    with hybrid sync-to-async execution using SQLite for state persistence
+    and asyncio for background tasks.
+
+    **Hybrid Execution Pattern**:
+    1. Attempts synchronous completion (30-second timeout)
+    2. If query completes quickly: returns full results immediately
+    3. If timeout exceeded: switches to async background execution
+
+    **Token Economics**:
+    - HIGH token cost (Gemini API usage)
+    - Results cached in SQLite for zero-cost retrieval via get_research_results
+
+    Args:
+        query: Research question or topic to investigate (3-10000 chars).
+               More specific queries yield better results.
+        enable_notifications: Send desktop notification on completion (default: True)
+        max_wait_hours: Maximum hours for async research before timeout (1-24, default: 8)
+        model: Gemini model for research (default: gemini-2.0-flash-thinking-exp)
+
+    Returns:
+        Dict with task_id, status, and either results (sync) or async tracking info
+
+    Example:
+        >>> result = await start_deep_research("What are the latest advances in quantum computing?")
+        >>> if result["status"] == "completed":
+        ...     print(result["results"]["report"])
+        >>> else:
+        ...     print(f"Running async. Check status with task_id: {result['task_id']}")
+    """
+    # Check availability per Constitution Principle III
+    if not DEEP_RESEARCH_AVAILABLE or not deep_research_engine:
+        return {
+            "success": False,
+            "error": "GEMINI_UNAVAILABLE",
+            "message": f"Deep research not available: {DEEP_RESEARCH_ERROR}",
+            "suggestion": "Check GEMINI_API_KEY in .env file"
+        }
+
+    # Validate query length
+    if len(query) < 3:
+        return {
+            "success": False,
+            "error": "INVALID_QUERY",
+            "message": "Query too short. Minimum 3 characters required.",
+            "suggestion": "Provide a more detailed research question"
+        }
+
+    if len(query) > 10000:
+        return {
+            "success": False,
+            "error": "INVALID_QUERY",
+            "message": "Query too long. Maximum 10000 characters allowed.",
+            "suggestion": "Shorten your query or break into multiple questions"
+        }
+
+    # Generate unique task ID
+    task_id = str(uuid.uuid4())
+
+    # Create task in SQLite (PENDING)
+    task = ResearchTask(
+        task_id=task_id,
+        query=query,
+        model=model,
+        status=TaskStatus.PENDING,
+        enable_notifications=enable_notifications,
+        max_wait_hours=max_wait_hours,
+        created_at=datetime.utcnow()
+    )
+    state_manager.save_task(task)
+    logger.info(f"Created research task {task_id[:8]}: {query[:50]}...")
+
+    # Update status to RUNNING
+    state_manager.update_task(task_id, {"status": TaskStatus.RUNNING})
+
+    try:
+        # Attempt sync completion with 30-second timeout
+        result = await deep_research_engine.execute_with_timeout(
+            query=query,
+            model=model,
+            timeout_seconds=30,
+            on_progress=lambda p, a: state_manager.update_task(
+                task_id, {"progress": p, "current_action": a}
+            )
+        )
+
+        if result.get("status") == "completed":
+            # Sync completion - save results and return
+            raw_result = result.get("result", {})
+            research_result = deep_research_engine.create_research_result(task_id, raw_result)
+
+            # Update tokens and cost
+            metadata = raw_result.get("metadata", {})
+            tokens_input = metadata.get("tokens_input", 0)
+            tokens_output = metadata.get("tokens_output", 0)
+
+            state_manager.save_result(task_id, research_result)
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.COMPLETED,
+                "progress": 100,
+                "tokens_input": tokens_input,
+                "tokens_output": tokens_output,
+                "completed_at": datetime.utcnow()
+            })
+
+            logger.info(f"Task {task_id[:8]} completed synchronously")
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "status": "completed",
+                "mode": "sync",
+                "results": {
+                    "report": research_result.report,
+                    "sources": [s.to_dict() for s in research_result.sources],
+                    "metadata": {
+                        "duration_minutes": round(
+                            (datetime.utcnow() - task.created_at).total_seconds() / 60, 2
+                        ),
+                        "tokens_used": {"input": tokens_input, "output": tokens_output},
+                        "cost_usd": round(
+                            tokens_input * 0.000001 + tokens_output * 0.000004, 4
+                        )
+                    }
+                }
+            }
+
+        else:
+            # Sync timeout - switch to async (T012)
+            interaction_id = result.get("interaction_id")
+
+            # Save interaction_id for crash recovery
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.RUNNING_ASYNC,
+                "interaction_id": interaction_id,
+                "current_action": "Running in background..."
+            })
+
+            # Define background research coroutine
+            async def background_research():
+                try:
+                    bg_result = await deep_research_engine.poll_until_complete(
+                        interaction_id,
+                        on_progress=lambda p, a: state_manager.update_task(
+                            task_id, {"progress": p, "current_action": a}
+                        ),
+                        max_wait_seconds=max_wait_hours * 3600
+                    )
+
+                    # Create and save result
+                    bg_research_result = deep_research_engine.create_research_result(
+                        task_id, bg_result
+                    )
+                    bg_metadata = bg_result.get("metadata", {})
+
+                    state_manager.save_result(task_id, bg_research_result)
+                    state_manager.update_task(task_id, {
+                        "status": TaskStatus.COMPLETED,
+                        "progress": 100,
+                        "tokens_input": bg_metadata.get("tokens_input", 0),
+                        "tokens_output": bg_metadata.get("tokens_output", 0),
+                        "completed_at": datetime.utcnow()
+                    })
+
+                    # Send notification
+                    if enable_notifications and notifier:
+                        duration_minutes = (
+                            datetime.utcnow() - task.created_at
+                        ).total_seconds() / 60
+                        notifier.notify_research_complete(task_id, duration_minutes)
+
+                    logger.info(f"Task {task_id[:8]} completed asynchronously")
+
+                except Exception as e:
+                    logger.error(f"Background research failed for {task_id[:8]}: {e}")
+                    state_manager.update_task(task_id, {
+                        "status": TaskStatus.FAILED,
+                        "error_message": str(e)
+                    })
+                    if enable_notifications and notifier:
+                        notifier.notify_research_failed(task_id, str(e))
+
+            # Spawn background task
+            background_manager.start_task(
+                task_id,
+                background_research(),
+                on_error=lambda tid, e: logger.error(f"Background task error: {e}")
+            )
+
+            logger.info(f"Task {task_id[:8]} switched to async mode")
+
+            return {
+                "success": True,
+                "task_id": task_id,
+                "status": "running_async",
+                "mode": "async",
+                "message": "Research running in background. Desktop notification will be sent on completion.",
+                "check_status_command": f"check_research_status(task_id='{task_id}')"
+            }
+
+    except Exception as e:
+        logger.error(f"Research failed for {task_id[:8]}: {e}")
+        state_manager.update_task(task_id, {
+            "status": TaskStatus.FAILED,
+            "error_message": str(e)
+        })
+        return {
+            "success": False,
+            "task_id": task_id,
+            "error": "RESEARCH_FAILED",
+            "message": f"Research failed: {str(e)}",
+            "suggestion": "Check query and try again, or check server logs for details"
+        }
+
+
+@mcp.tool()
+def get_research_results(
+    task_id: str,
+    include_sources: bool = True
+) -> Dict[str, Any]:
+    """Retrieve completed research results from SQLite storage.
+
+    **Zero Token Cost** - Reads from local SQLite database, no Gemini API calls.
+
+    This tool retrieves previously completed deep research results. Results are
+    stored permanently in SQLite until explicitly deleted, allowing multiple
+    retrievals without additional API costs.
+
+    Args:
+        task_id: Task UUID from start_deep_research response
+        include_sources: Include source list in response (default: True)
+
+    Returns:
+        Dict with report, sources (optional), and metadata if completed;
+        error information if not found or still in progress
+
+    Example:
+        >>> result = get_research_results("550e8400-e29b-41d4-a716-446655440000")
+        >>> if result["success"]:
+        ...     print(result["report"][:500])  # First 500 chars of report
+        ...     print(f"Sources: {len(result['sources'])}")
+    """
+    # Check availability
+    if not state_manager:
+        return {
+            "success": False,
+            "error": "SQLITE_ERROR",
+            "message": "State manager not available",
+            "suggestion": "Check server initialization"
+        }
+
+    # Validate task_id format (basic UUID check)
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {
+            "success": False,
+            "error": "INVALID_QUERY",
+            "message": f"Invalid task_id format: {task_id}",
+            "suggestion": "Provide a valid UUID from start_deep_research"
+        }
+
+    # Get task from SQLite
+    task = state_manager.get_task(task_id)
+    if not task:
+        return {
+            "success": False,
+            "error": "TASK_NOT_FOUND",
+            "message": f"No research task found with ID: {task_id}",
+            "suggestion": "Verify task_id from start_deep_research response"
+        }
+
+    # Check if completed
+    if task.status != TaskStatus.COMPLETED:
+        return {
+            "success": False,
+            "error": "RESEARCH_NOT_COMPLETED",
+            "task_id": task_id,
+            "status": task.status.value,
+            "progress": task.progress,
+            "message": f"Research is still in progress. Current progress: {task.progress}%",
+            "suggestion": "Wait for completion or use check_research_status to monitor"
+        }
+
+    # Get results from SQLite
+    result = state_manager.get_result(task_id)
+    if not result:
+        return {
+            "success": False,
+            "error": "RESEARCH_FAILED",
+            "task_id": task_id,
+            "message": "Task completed but results not found in database",
+            "suggestion": "Research may have failed. Check task status for error details."
+        }
+
+    # Calculate duration
+    duration_minutes = 0
+    if task.created_at and task.completed_at:
+        duration_minutes = (task.completed_at - task.created_at).total_seconds() / 60
+
+    # Build response per contract
+    response = {
+        "success": True,
+        "task_id": task_id,
+        "query": task.query,
+        "report": result.report,
+        "metadata": {
+            "duration_minutes": round(duration_minutes, 2),
+            "tokens_used": {
+                "input": task.tokens_input,
+                "output": task.tokens_output
+            },
+            "cost_usd": round(task.cost_usd or (
+                task.tokens_input * 0.000001 + task.tokens_output * 0.000004
+            ), 4),
+            "mode": "async" if task.status == TaskStatus.RUNNING_ASYNC else "sync",
+            "model": task.model,
+            "source_count": len(result.sources),
+            "started_at": task.created_at.isoformat() if task.created_at else None,
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None
+        }
+    }
+
+    # Include sources if requested
+    if include_sources:
+        response["sources"] = [s.to_dict() for s in result.sources]
+
+    return response
+
 
 # ============================================================================
 # Original Gemini Tools

@@ -9,7 +9,7 @@ tags: []
 ## Current Work Focus
 
 ### Primary Activity
-**Image Analysis Tool Enhanced** - Successfully enhanced interpret_image tool to support URLs and base64-encoded images in addition to local file paths (v3.3.0).
+**Hybrid Deep Research System - Wave 1-2 Foundation Complete** - Successfully implemented foundational infrastructure for deep research capabilities including SQLite state management, cross-platform notifications, asyncio background tasks, and comprehensive data models (Wave 1-2 of Feature 001).
 
 ### Immediate Goals
 - :white_check_mark: Complete core Memory Bank file structure
@@ -18,122 +18,173 @@ tags: []
 - :white_check_mark: Restore all tool functionality including grounding
 - :white_check_mark: Add watch_video tool for video analysis
 - :white_check_mark: Enhance interpret_image with URL and base64 support
-- :hourglass_flowing_sand: Real-world testing of enhanced interpret_image tool
-- :white_large_square: Update README.md with v3.3.0 changes
+- :white_check_mark: Wave 1 Setup (T001-T004) - Module structure, dependencies, environment config, output directories
+- :white_check_mark: Wave 2 Foundation (T005-T008) - Data models, StateManager, NativeNotifier, BackgroundTaskManager
+- :hourglass_flowing_sand: Wave 3 Core Engine (T009-T010) - DeepResearchEngine and startup recovery
+- :white_large_square: Update README.md with deep research features
 
 ## Recent Changes
 
 ### Project Status (as of current session)
-- **Version**: 3.3.0 (Image analysis tool enhanced with URL and base64 support)
-- **Architecture**: Modern unified Google Gen AI SDK + official Anthropic MCP SDK
+- **Version**: 3.6.0 (Deep Research System - Wave 1-2 Foundation)
+- **Branch**: 001-hybrid-deep-research
+- **Architecture**: Modern unified Google Gen AI SDK + official Anthropic MCP SDK + SQLite + asyncio
 - **Core Functionality**: All seven Gemini tools implemented and working
-- **Dependencies**: gRPC compatibility fixed, pillow added for video/image support
-- **Configuration**: Automated setup scripts available
+- **New Module**: deep_research/ with zero-external-dependency foundation (SQLite + asyncio)
+- **Dependencies**: notify-py and Jinja2 added for notifications and templating
+- **Configuration**: Added RESEARCH_REPORTS_DIR to environment variables
 - **Multimodal Capabilities**:
   - Video: YouTube URLs (direct) and local files (<20MB inline, >20MB via File API)
   - Images: Local files, URLs (http/https), and base64 data URIs (all methods supported)
+- **Deep Research Foundation**:
+  - SQLite state persistence with WAL mode for concurrent access
+  - Cross-platform desktop notifications with fallback chain
+  - asyncio background task management
+  - Comprehensive data models (TaskStatus, Source, TokenUsage, ResearchTask, ResearchResult, CostEstimate)
 
-### Key Files Modified
-- `README.md` - Modified (needs review)
-- `requirements.txt` - Modified (dependency updates)
-- `server.py` - Modified (core implementation)
-- Added: `main.py`, `pyproject.toml`, `uv.lock`
-- Removed: `install.sh`, `setup.sh` (legacy scripts)
+### Key Files Created/Modified (Wave 1-2)
+**Wave 1 Setup (T001-T004)**:
+- Created: `deep_research/` module with all foundation files
+- Modified: `requirements.txt` (added notify-py, Jinja2)
+- Modified: `.env.example` (added GEMINI_API_KEY, RESEARCH_REPORTS_DIR)
+- Created: `research_reports/` directory with `.gitkeep`
+- Modified: `.gitignore` (excluded research reports and DB file)
+
+**Wave 2 Foundation (T005-T008)**:
+- Created: `deep_research/__init__.py` (data models: TaskStatus, Source, TokenUsage, ResearchTask, ResearchResult, CostEstimate)
+- Created: `deep_research/state_manager.py` (SQLite persistence with WAL mode)
+- Created: `deep_research/notification.py` (NativeNotifier with fallback chain)
+- Created: `deep_research/background.py` (BackgroundTaskManager for asyncio tasks)
+- Created: `deep_research/engine.py` (stub for DeepResearchEngine)
+- Created: `deep_research/cost_estimator.py` (stub for CostEstimator)
+- Created: `deep_research/storage.py` (stub for MarkdownStorage)
 
 ### Git Status Summary
 ```
-M README.md
-D install.sh  
+Current branch: 001-hybrid-deep-research
+Latest commit: dc5e08e feat(deep-research): implement Wave 1-2 foundation modules
+
+New files:
+?? deep_research/__init__.py
+?? deep_research/engine.py
+?? deep_research/state_manager.py
+?? deep_research/notification.py
+?? deep_research/cost_estimator.py
+?? deep_research/storage.py
+?? deep_research/background.py
+?? research_reports/.gitkeep
+?? specs/001-hybrid-deep-research/
+
+Modified:
 M requirements.txt
-M server.py
-D setup.sh
-?? .python-version
-?? CLAUDE.md  
-?? generate_config.sh
-?? main.py
-?? pyproject.toml
-?? uv.lock
+M .env.example
+M .gitignore
 ```
 
 ## Next Steps
 
-### Immediate (Current Session)
-1. :white_check_mark: Added watch_video tool for video analysis
-2. :white_check_mark: Updated documentation and memory bank
-3. :white_check_mark: Fixed YouTube URL detection bug
-4. :white_check_mark: Integrated video processing with best practices
-5. :white_check_mark: Enhanced interpret_image tool with URL support
-6. :white_check_mark: Added base64 data URI support to interpret_image
-7. :white_check_mark: Researched Gemini API best practices with Context7
-8. :white_check_mark: Updated Memory Bank for v3.3.0
+### Immediate (Current Session - Wave 3)
+1. :white_check_mark: Wave 1 Setup complete (T001-T004)
+2. :white_check_mark: Wave 2 Foundation complete (T005-T008)
+3. :white_check_mark: Memory Bank updated with Wave 1-2 progress
+4. :hourglass_flowing_sand: Wave 3: DeepResearchEngine implementation (T009)
+5. :white_large_square: Wave 3: Startup recovery mechanism (T010)
 
-### Short Term (Next 1-2 Sessions)
-- :white_large_square: **Real-World Testing**: Test interpret_image with actual URLs and base64 images
-- :white_large_square: **Documentation Review**: Update README.md to reflect v3.3.0 changes
-- :white_large_square: **Testing**: Validate all seven Gemini tools work correctly
-- :white_large_square: **Configuration**: Test `generate_config.sh` script
-- :white_large_square: **Cleanup**: Remove any obsolete files or references
+### Short Term (Next 1-2 Sessions - Wave 3-5)
+- :white_large_square: **T009**: Implement DeepResearchEngine with Gemini Deep Research API integration
+- :white_large_square: **T010**: Implement startup recovery for incomplete tasks
+- :white_large_square: **Wave 4 (T011-T014)**: US1 MVP - start_deep_research tool with sync/async paths
+- :white_large_square: **Wave 5 (T015-T018)**: US2 async notifications and status checking
+- :white_large_square: **Research**: Investigate actual Gemini Deep Research API polling mechanism
+- :white_large_square: **Testing**: Integration tests for sync and async research flows
 
-### Medium Term (Future Sessions)
-- :white_large_square: **Enhanced Error Handling**: Add more robust error scenarios
-- :white_large_square: **Performance**: Add async support for concurrent requests
-- :white_large_square: **Testing Suite**: Implement automated testing
-- :white_large_square: **Documentation**: Add usage examples and troubleshooting guide
+### Medium Term (Future Sessions - Wave 6-13)
+- :white_large_square: **Wave 6-7**: US3-US4 (cost estimation and cancellation)
+- :white_large_square: **Wave 8-9**: US5 (markdown persistence)
+- :white_large_square: **Wave 10-11**: Recovery and polish
+- :white_large_square: **Documentation**: Update README.md with deep research features
+- :white_large_square: **Final Testing**: Full integration test suite (T030)
+- :white_large_square: **Version Bump**: Update to v3.7.0 per Constitution Principle V
 
 ## Active Decisions and Considerations
 
 ### Architecture Decisions
 - **✅ Confirmed**: Using official MCP SDK (v0.5.0+)
-- **✅ Confirmed**: Single-file server implementation for simplicity
+- **✅ Confirmed**: Modular architecture with deep_research/ module
 - **✅ Confirmed**: Environment-based configuration
-- **🤔 Under Review**: Whether to add async/await support
+- **✅ Confirmed**: SQLite + asyncio for deep research (zero external dependencies)
+- **✅ Confirmed**: Hybrid sync-to-async execution pattern
+- **✅ Confirmed**: WAL mode for SQLite concurrent access
 
 ### Technology Choices
 - **✅ Confirmed**: `uv` as primary package manager
 - **✅ Confirmed**: Maintaining pip compatibility via requirements.txt
-- **✅ Confirmed**: Gemini 2.0 Flash model selection
-- **🤔 Under Review**: Whether to add type checking (mypy)
+- **✅ Confirmed**: Gemini 2.0 Flash model for general tools
+- **✅ Confirmed**: Deep Research Pro Preview (12-2025) for research tasks
+- **✅ Confirmed**: notify-py for cross-platform notifications
+- **✅ Confirmed**: Jinja2 for markdown report templating
+- **🤔 Under Review**: Actual Gemini Deep Research API polling mechanism (requires research)
+
+### Deep Research System Decisions
+- **✅ Confirmed**: 30-second sync timeout before switching to async
+- **✅ Confirmed**: SQLite for state persistence (crash recovery)
+- **✅ Confirmed**: Cross-platform notification fallback chain (notify-py -> CLI -> console)
+- **✅ Confirmed**: Month-based subdirectory organization for reports
+- **🤔 Under Investigation**: Gemini Deep Research API status polling endpoint and schema
 
 ### Project Management
 - **✅ Confirmed**: Memory Bank documentation system
-- **✅ Confirmed**: Git-based version control
+- **✅ Confirmed**: Git-based version control with feature branches
+- **✅ Confirmed**: Wave-based implementation strategy (13 waves for Feature 001)
+- **✅ Confirmed**: Constitution VII compliance with parallel swarm execution
 - **🤔 Under Review**: Whether to add CI/CD automation
 - **🤔 Under Review**: Release/versioning strategy
 
 ## Context Notes
 
 ### Working Environment
-- **Platform**: Linux 5.15.0-142-generic
+- **Platform**: Linux 5.15.0-163-generic
 - **Package Manager**: uv (primary), pip (fallback)
-- **Git Status**: Main branch, multiple modified files
+- **Git Status**: Feature branch 001-hybrid-deep-research
 - **Documentation**: Memory Bank system implemented
+- **Current Work**: Deep Research System implementation (Wave 1-2 complete)
 
-### Key Insights from Codebase Review
-- Project has successfully migrated from custom JSON-RPC to official MCP SDK
-- All core functionality appears complete and working
-- Configuration automation is in place
-- Project structure is clean and well-organized
+### Key Insights from Wave 1-2 Implementation
+- SQLite with WAL mode provides excellent concurrent access for background tasks
+- Python stdlib (dataclasses, enum, sqlite3, asyncio) eliminates external dependencies
+- Cross-platform notification requires fallback chain for reliability
+- Data models use type hints for automatic JSON schema generation via MCP SDK
+- Background task management cleanly separates sync and async execution paths
+
+### Feature 001 Implementation Notes
+- **Zero External Dependencies**: Only SQLite (stdlib) and asyncio (stdlib) for core functionality
+- **Spec Location**: /home/gyasis/Documents/code/gemini-mcp/specs/001-hybrid-deep-research/
+- **Wave Strategy**: 13 waves total, currently completed 2 waves (Setup + Foundation)
+- **Parallel Execution**: 19 of 30 tasks can run in parallel (63% parallelization)
+- **Constitution Compliance**: Following Principle VII for wave execution with checkpoints
 
 ### User Preferences Observed
 - Prefers comprehensive documentation (Memory Bank system)
 - Values clean, maintainable code architecture
 - Appreciates automation (uv, generate_config.sh)
 - Focuses on user experience and ease of setup
+- Uses wave-based implementation with parallel agent swarms
 
 ## Session Continuity Notes
 
 ### For Next Session
 When resuming work on this project:
 1. **Read All Memory Bank Files**: Start with projectbrief.md, then read all files
-2. **Check Git Status**: Review any new changes since this session
-3. **Test Core Functionality**: Verify server starts and tools work
-4. **Review Progress**: Check progress.md for current status
+2. **Check Git Status**: Review branch 001-hybrid-deep-research status
+3. **Review Wave Progress**: Check specs/001-hybrid-deep-research/tasks.md for Wave 3 status
+4. **Research Requirement**: T009 requires investigating actual Gemini Deep Research API polling mechanism
+5. **Next Implementation**: Wave 3 (T009-T010) - DeepResearchEngine and startup recovery
 
 ### Critical Context
-- This is a **working, functional project** at v3.3.0
-- Major refactor has been **completed successfully**
-- **New in v3.3.0**: interpret_image tool enhanced with URL and base64 support
-- **New in v3.1.0**: watch_video tool supports YouTube URLs and local video files
-- Focus should be on **testing, maintenance, documentation, and enhancements**
-- Memory Bank system is **newly implemented** and should be maintained
-- All seven tools are syntax-validated and production-ready
+- This is a **working, functional project** at v3.6.0 (in-progress)
+- **Feature Branch**: 001-hybrid-deep-research (Wave 1-2 complete)
+- **Wave 1-2 Complete**: Foundation infrastructure ready for core engine implementation
+- **Next Wave**: Wave 3 requires Gemini Deep Research API research before implementation
+- **Commit**: dc5e08e - feat(deep-research): implement Wave 1-2 foundation modules
+- Memory Bank system is maintained and should be updated after each wave completion
+- All seven original tools remain syntax-validated and production-ready
