@@ -677,6 +677,218 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
         return response
 
 
+@mcp.tool()
+def cancel_research(
+    task_id: str,
+    save_partial: bool = True
+) -> Dict[str, Any]:
+    """Cancel a running research task. Optionally save partial results.
+
+    Use this tool when you need to stop a long-running research task before completion.
+    This is useful when:
+    - The research is taking too long
+    - You realize the query was incorrect
+    - You want to start a different research task
+    - The user requests cancellation
+
+    **Partial Results**: By default, any partial results gathered before cancellation
+    are saved and can be retrieved with get_research_results. Set save_partial=False
+    to discard all progress.
+
+    **Zero Gemini Cost**: Cancellation itself doesn't consume tokens, though
+    partial costs from research already performed are retained.
+
+    Args:
+        task_id: Task UUID from start_deep_research response.
+        save_partial: Whether to save partial results before canceling (default: True).
+
+    Returns:
+        Dict with cancellation status, progress at cancellation, and cost info.
+    """
+    if not DEEP_RESEARCH_AVAILABLE:
+        return {
+            "success": False,
+            "error": "DEEP_RESEARCH_NOT_AVAILABLE",
+            "message": f"Deep research module not available: {DEEP_RESEARCH_ERROR}"
+        }
+
+    # Validate UUID format
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {
+            "success": False,
+            "error": "INVALID_TASK_ID",
+            "message": "Invalid task_id format. Expected UUID v4."
+        }
+
+    # Get task from database
+    task = state_manager.get_task(task_id)
+    if not task:
+        return {
+            "success": False,
+            "error": "TASK_NOT_FOUND",
+            "message": f"No research task found with ID: {task_id}",
+            "suggestion": "Verify task_id from start_deep_research response"
+        }
+
+    # Check if task is already completed or failed
+    if task.status == TaskStatus.COMPLETED:
+        return {
+            "success": False,
+            "error": "RESEARCH_ALREADY_COMPLETED",
+            "task_id": task_id,
+            "status": "completed",
+            "message": "Cannot cancel: research already completed",
+            "suggestion": "Use get_research_results to retrieve completed research"
+        }
+
+    if task.status == TaskStatus.FAILED:
+        return {
+            "success": False,
+            "error": "RESEARCH_ALREADY_FAILED",
+            "task_id": task_id,
+            "status": "failed",
+            "message": "Cannot cancel: research already failed",
+            "error_message": task.error_message
+        }
+
+    if task.status == TaskStatus.CANCELLED:
+        return {
+            "success": False,
+            "error": "RESEARCH_ALREADY_CANCELLED",
+            "task_id": task_id,
+            "status": "cancelled",
+            "message": "Research was already cancelled"
+        }
+
+    # Try to cancel the background task
+    progress_at_cancellation = task.progress
+    partial_saved = False
+
+    # Cancel the asyncio task if it's running
+    if background_manager:
+        cancelled = background_manager.cancel_task(task_id)
+        if cancelled:
+            logger.info(f"Cancelled background task for {task_id}")
+
+    # Calculate cost so far
+    cost_usd = 0.0
+    if task.tokens_input > 0 or task.tokens_output > 0:
+        from deep_research import TokenUsage
+        usage = TokenUsage(input=task.tokens_input, output=task.tokens_output)
+        cost_usd = usage.estimate_cost_usd()
+
+    # Optionally save partial results
+    if save_partial and task.progress > 0:
+        # Check if there's any existing result to preserve
+        existing_result = state_manager.get_result(task_id)
+        if existing_result and existing_result.report:
+            partial_saved = True
+            # Result already exists, just mark as partial in metadata
+            if existing_result.metadata is None:
+                existing_result.metadata = {}
+            existing_result.metadata["cancelled_at_progress"] = progress_at_cancellation
+            existing_result.metadata["partial"] = True
+            state_manager.save_result(task_id, existing_result)
+
+    # Update task status to cancelled
+    state_manager.update_task(task_id, {
+        "status": TaskStatus.CANCELLED,
+        "current_action": f"Cancelled at {progress_at_cancellation}% progress",
+        "cost_usd": cost_usd,
+        "completed_at": datetime.utcnow()
+    })
+
+    logger.info(f"Research task {task_id} cancelled at {progress_at_cancellation}%")
+
+    response = {
+        "success": True,
+        "task_id": task_id,
+        "status": "cancelled",
+        "partial_results_saved": partial_saved,
+        "progress_at_cancellation": progress_at_cancellation,
+        "cost_usd": round(cost_usd, 4)
+    }
+
+    if partial_saved:
+        response["message"] = "Research cancelled. Partial results saved and accessible via get_research_results."
+    else:
+        response["message"] = "Research cancelled. No partial results available."
+
+    return response
+
+
+@mcp.tool()
+def estimate_research_cost(query: str) -> Dict[str, Any]:
+    """Estimate cost and duration before starting research. Analyzes query complexity.
+
+    Use this tool BEFORE starting research to:
+    - Understand if the query will complete quickly (sync) or take time (async)
+    - Get an estimate of the token and dollar costs involved
+    - Receive recommendations on query optimization
+    - Make informed decisions about whether to proceed
+
+    **Zero Token Cost**: This tool uses local heuristics only - no Gemini API calls.
+
+    **Complexity Factors Analyzed**:
+    - Query length and structure
+    - Multi-domain scope (comparing topics, regions, etc.)
+    - Temporal scope (historical analysis, forecasts)
+    - Synthesis requirements (analysis, evaluation, comparison)
+
+    Args:
+        query: The research question to analyze (3-10000 characters).
+
+    Returns:
+        Dict with complexity assessment, duration/cost estimates, and recommendations.
+    """
+    if not DEEP_RESEARCH_AVAILABLE:
+        return {
+            "success": False,
+            "error": "DEEP_RESEARCH_NOT_AVAILABLE",
+            "message": f"Deep research module not available: {DEEP_RESEARCH_ERROR}"
+        }
+
+    # Validate query length
+    if not query or len(query) < 3:
+        return {
+            "success": False,
+            "error": "QUERY_TOO_SHORT",
+            "message": "Query must be at least 3 characters"
+        }
+
+    if len(query) > 10000:
+        return {
+            "success": False,
+            "error": "QUERY_TOO_LONG",
+            "message": "Query must be 10000 characters or less"
+        }
+
+    # Use the CostEstimator
+    from deep_research.cost_estimator import get_cost_estimator
+
+    estimator = get_cost_estimator()
+    estimate = estimator.estimate(query)
+
+    return {
+        "query": query[:200] + "..." if len(query) > 200 else query,
+        "query_complexity": estimate.query_complexity,
+        "estimated_duration": {
+            "min_minutes": estimate.min_minutes,
+            "max_minutes": estimate.max_minutes,
+            "likely_minutes": estimate.likely_minutes
+        },
+        "estimated_cost": {
+            "min_usd": estimate.min_usd,
+            "max_usd": estimate.max_usd,
+            "likely_usd": estimate.likely_usd
+        },
+        "will_likely_go_async": estimate.will_likely_go_async,
+        "recommendation": estimate.recommendation
+    }
+
+
 # ============================================================================
 # Original Gemini Tools
 # ============================================================================
