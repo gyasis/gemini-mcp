@@ -3,18 +3,85 @@ StateManager - SQLite-based state persistence for research tasks.
 
 Uses Python's built-in sqlite3 module for zero external dependencies.
 Stores task state and results with WAL mode for better concurrent access.
+Includes retry logic for handling transient SQLite errors (database locks, busy timeouts).
 """
 
 import sqlite3
 import json
+import time
+import functools
 from pathlib import Path
-from typing import Optional, List, Tuple, Dict, Any
+from typing import Optional, List, Tuple, Dict, Any, Callable, TypeVar
 from datetime import datetime
 import logging
 
 from . import TaskStatus, ResearchTask, ResearchResult, Source
 
 logger = logging.getLogger(__name__)
+
+# Type variable for generic return type in retry decorator
+T = TypeVar('T')
+
+
+def sqlite_retry(
+    max_retries: int = 3,
+    base_delay: float = 0.1,
+    max_delay: float = 2.0,
+    backoff_factor: float = 2.0
+) -> Callable[[Callable[..., T]], Callable[..., T]]:
+    """Decorator for retrying SQLite operations on transient errors.
+
+    Implements exponential backoff for database lock and busy errors.
+    This handles concurrent access gracefully without failing immediately.
+
+    Args:
+        max_retries: Maximum number of retry attempts (default: 3)
+        base_delay: Initial delay in seconds between retries (default: 0.1)
+        max_delay: Maximum delay cap in seconds (default: 2.0)
+        backoff_factor: Multiplier for exponential backoff (default: 2.0)
+
+    Returns:
+        Decorated function with retry logic
+
+    Raises:
+        sqlite3.OperationalError: After all retries exhausted
+        sqlite3.DatabaseError: For non-retryable errors
+    """
+    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs) -> T:
+            last_error = None
+            delay = base_delay
+
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except sqlite3.OperationalError as e:
+                    error_msg = str(e).lower()
+                    # Retry on database lock or busy errors
+                    if 'locked' in error_msg or 'busy' in error_msg:
+                        last_error = e
+                        if attempt < max_retries:
+                            logger.warning(
+                                f"SQLite operation failed (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                                f"Retrying in {delay:.2f}s..."
+                            )
+                            time.sleep(delay)
+                            delay = min(delay * backoff_factor, max_delay)
+                            continue
+                    # Non-retryable OperationalError
+                    raise
+                except sqlite3.DatabaseError as e:
+                    # Log and re-raise non-retryable database errors
+                    logger.error(f"SQLite database error in {func.__name__}: {e}")
+                    raise
+
+            # All retries exhausted
+            logger.error(f"SQLite operation failed after {max_retries + 1} attempts: {last_error}")
+            raise last_error
+
+        return wrapper
+    return decorator
 
 
 class StateManager:
@@ -78,6 +145,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def save_task(self, task: ResearchTask) -> None:
         """Save or update a research task."""
         conn = self._get_connection()
@@ -110,6 +178,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def get_task(self, task_id: str) -> Optional[ResearchTask]:
         """Retrieve a task by ID."""
         conn = self._get_connection()
@@ -143,6 +212,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def update_task(self, task_id: str, updates: Dict[str, Any]) -> None:
         """Update specific fields of a task."""
         if not updates:
@@ -173,6 +243,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def get_incomplete_tasks(self) -> List[Tuple[str, Optional[str]]]:
         """Get tasks that need to be resumed on startup.
 
@@ -188,6 +259,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def save_result(self, task_id: str, result: ResearchResult) -> None:
         """Save research results."""
         conn = self._get_connection()
@@ -213,6 +285,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def get_result(self, task_id: str) -> Optional[ResearchResult]:
         """Retrieve research results by task ID."""
         conn = self._get_connection()
@@ -246,6 +319,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def delete_task(self, task_id: str) -> bool:
         """Delete a task and its results."""
         conn = self._get_connection()
@@ -258,6 +332,7 @@ class StateManager:
         finally:
             conn.close()
 
+    @sqlite_retry()
     def get_all_tasks(self, limit: int = 100) -> List[ResearchTask]:
         """Get all tasks, most recent first."""
         conn = self._get_connection()

@@ -1,7 +1,15 @@
 #!/usr/bin/env python3
 """
-Gemini MCP Server v3.6.0
-Enables a primary AI assistant to collaborate with Google's Gemini AI using the modern unified Google Gen AI SDK
+Gemini MCP Server v3.7.0
+Enables a primary AI assistant to collaborate with Google's Gemini AI using the modern unified Google Gen AI SDK.
+
+Features Gemini Deep Research tools with SQLite persistence and asyncio background tasks:
+- start_deep_research: Hybrid sync-to-async research execution
+- get_research_results: Zero-cost result retrieval from SQLite
+- check_research_status: Monitor async task progress
+- cancel_research: Stop running tasks with optional partial saves
+- estimate_research_cost: Pre-execution cost analysis
+- save_research_to_markdown: Export results to formatted Markdown files
 """
 
 import os
@@ -28,7 +36,7 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # Server version
-__version__ = "3.6.0"
+__version__ = "3.7.0"
 
 # Initialize MCP server
 mcp = FastMCP("Gemini MCP Server", version=__version__)
