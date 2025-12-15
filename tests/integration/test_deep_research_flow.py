@@ -17,44 +17,33 @@ from unittest.mock import Mock, MagicMock
 from deep_research import TaskStatus, ResearchTask, ResearchResult, Source
 
 
-class MockGeminiResponse:
-    """Mock Gemini API response for testing."""
+class MockInteraction:
+    """Mock Gemini Interactions API response for testing."""
 
-    def __init__(self, text: str, usage_metadata=None, candidates=None):
-        self._text = text
-        self.usage_metadata = usage_metadata or MockUsageMetadata()
-        self.candidates = candidates
+    def __init__(self, text: str = "", status: str = "completed", usage_metadata=None):
         self.id = f"mock-interaction-{uuid.uuid4().hex[:8]}"
+        self.status = status
+        self.usage_metadata = usage_metadata or MockUsageMetadata()
+        self.grounding_metadata = None
+        # Outputs contain the response text
+        self.outputs = [MockOutput(text)] if text else []
 
-    @property
-    def text(self):
-        return self._text
+    def set_status(self, status: str):
+        """Update status for polling simulation."""
+        self.status = status
+
+
+class MockOutput:
+    """Mock output from Interaction."""
+
+    def __init__(self, text: str):
+        self.text = text
 
 
 class MockUsageMetadata:
     """Mock usage metadata."""
     prompt_token_count = 100
     candidates_token_count = 500
-
-
-class MockCandidate:
-    """Mock candidate with grounding metadata."""
-
-    def __init__(self):
-        self.content = MockContent()
-        self.grounding_metadata = MockGroundingMetadata()
-
-
-class MockContent:
-    """Mock content with parts."""
-
-    def __init__(self):
-        self.parts = [MockPart()]
-
-
-class MockPart:
-    """Mock part with text."""
-    text = "Test research report content."
 
 
 class MockGroundingMetadata:
@@ -105,11 +94,13 @@ class TestSyncCompletionFlow:
         # Setup
         _state_manager = StateManager(db_path=temp_db)  # noqa: F841
 
-        # Configure mock to return immediately
-        mock_response = MockGeminiResponse(
-            text="# Research Report\n\nThis is the completed research on the topic."
+        # Configure mock Interactions API to return completed immediately
+        mock_interaction = MockInteraction(
+            text="# Research Report\n\nThis is the completed research on the topic.",
+            status="completed"
         )
-        mock_client.models.generate_content = Mock(return_value=mock_response)
+        mock_client.interactions.create = Mock(return_value=mock_interaction)
+        mock_client.interactions.get = Mock(return_value=mock_interaction)
 
         engine = DeepResearchEngine(mock_client)
 
@@ -127,10 +118,13 @@ class TestSyncCompletionFlow:
         """Test execute_with_timeout returns completed result within timeout."""
         from deep_research.engine import DeepResearchEngine
 
-        mock_response = MockGeminiResponse(
-            text="# Quick Answer\n\nPython is a programming language."
+        # Configure mock Interactions API to return completed immediately
+        mock_interaction = MockInteraction(
+            text="# Quick Answer\n\nPython is a programming language.",
+            status="completed"
         )
-        mock_client.models.generate_content = Mock(return_value=mock_response)
+        mock_client.interactions.create = Mock(return_value=mock_interaction)
+        mock_client.interactions.get = Mock(return_value=mock_interaction)
 
         engine = DeepResearchEngine(mock_client)
 
@@ -193,11 +187,9 @@ class TestAsyncSwitchFlow:
         """Test that a complex query switches to async after timeout."""
         from deep_research.engine import DeepResearchEngine
 
-        # Configure mock to simulate slow response (no immediate text)
-        mock_response = MagicMock()
-        mock_response.text = None  # No immediate response
-        mock_response.id = "async-interaction-123"
-        mock_client.models.generate_content = Mock(return_value=mock_response)
+        # Configure mock Interactions API to return in_progress status
+        mock_interaction = MockInteraction(text="", status="in_progress")
+        mock_client.interactions.create = Mock(return_value=mock_interaction)
 
         engine = DeepResearchEngine(mock_client)
 
@@ -206,7 +198,7 @@ class TestAsyncSwitchFlow:
             "Comprehensive analysis of machine learning trends 2024"
         )
 
-        # Should indicate async
+        # Should indicate async (in_progress status means not completed immediately)
         if not result.get("completed_immediately"):
             assert result.get("status") == "running"
             assert result.get("interaction_id") is not None
@@ -216,11 +208,11 @@ class TestAsyncSwitchFlow:
         """Test execute_with_timeout switches to async on timeout."""
         from deep_research.engine import DeepResearchEngine
 
-        # Mock that takes time (simulate by having no text initially)
-        mock_response = MagicMock()
-        mock_response.text = None
-        mock_response.id = "async-interaction-456"
-        mock_client.models.generate_content = Mock(return_value=mock_response)
+        # Configure mock to return in_progress status (async mode)
+        mock_interaction = MockInteraction(text="", status="in_progress")
+        mock_client.interactions.create = Mock(return_value=mock_interaction)
+        # Get returns in_progress - will timeout
+        mock_client.interactions.get = Mock(return_value=mock_interaction)
 
         engine = DeepResearchEngine(mock_client)
 
@@ -230,8 +222,7 @@ class TestAsyncSwitchFlow:
             timeout_seconds=0.1  # Very short timeout to force async
         )
 
-        # Should return async status if response takes longer
-        # Note: With mock returning immediately but no text, it depends on implementation
+        # Should return async status since polling times out
         assert result["status"] in ["completed", "running_async"]
 
     @pytest.mark.asyncio
@@ -239,10 +230,16 @@ class TestAsyncSwitchFlow:
         """Test polling mechanism for async research."""
         from deep_research.engine import DeepResearchEngine
 
+        # Configure mock to return completed on get
+        mock_completed_interaction = MockInteraction(
+            text="# Completed Research\n\nThis is the final report.",
+            status="completed"
+        )
+        mock_client.interactions.get = Mock(return_value=mock_completed_interaction)
+
         engine = DeepResearchEngine(mock_client)
 
-        # The current implementation returns completed immediately
-        # This tests the polling interface
+        # Test the polling interface
         progress_updates = []
 
         def track_progress(progress, action):
@@ -255,8 +252,10 @@ class TestAsyncSwitchFlow:
             max_wait_seconds=1
         )
 
-        # Should return with complete status
+        # Should return with complete status and report
         assert result is not None
+        assert "report" in result
+        assert "Completed Research" in result["report"]
 
 
 class TestStateManagerIntegration:
@@ -451,11 +450,13 @@ class TestEndToEndFlow:
         state_manager = StateManager(db_path=temp_db)
         _background_manager = BackgroundTaskManager()  # noqa: F841
 
-        # Configure mock for immediate completion
-        mock_response = MockGeminiResponse(
-            text="# Research Report\n\n## Introduction\nThis is comprehensive research."
+        # Configure mock Interactions API for immediate completion
+        mock_interaction = MockInteraction(
+            text="# Research Report\n\n## Introduction\nThis is comprehensive research.",
+            status="completed"
         )
-        mock_client.models.generate_content = Mock(return_value=mock_response)
+        mock_client.interactions.create = Mock(return_value=mock_interaction)
+        mock_client.interactions.get = Mock(return_value=mock_interaction)
 
         engine = DeepResearchEngine(mock_client)
 

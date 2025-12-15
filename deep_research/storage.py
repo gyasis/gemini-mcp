@@ -88,7 +88,7 @@ class MarkdownStorage:
             "cost_usd": task_data.get("cost_usd", 0.0),
             "tokens_input": task_data.get("tokens_input", 0),
             "tokens_output": task_data.get("tokens_output", 0),
-            "model": task_data.get("model", "gemini-2.0-flash-thinking-exp"),
+            "model": task_data.get("model", "deep-research-pro-preview-12-2025"),
             "include_metadata": include_metadata,
             "include_sources": include_sources,
             "saved_at": now.isoformat()

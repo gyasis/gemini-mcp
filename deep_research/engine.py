@@ -1,8 +1,8 @@
 """
-DeepResearchEngine - Wraps Gemini Deep Research API with hybrid sync-to-async execution.
+DeepResearchEngine - Wraps Gemini Deep Research Interactions API.
 
-Uses the unified google-genai SDK for Gemini API access.
-Implements 30s sync timeout then async handoff pattern.
+Uses the Interactions API (NOT generateContent) for deep research.
+Model: deep-research-pro-preview-12-2025 (December 2025 release)
 """
 
 import asyncio
@@ -11,7 +11,6 @@ from typing import Optional, Dict, Any, Callable, List
 from datetime import datetime
 
 from google import genai
-from google.genai import types
 
 from . import Source, ResearchResult
 
@@ -19,18 +18,19 @@ logger = logging.getLogger(__name__)
 
 
 class DeepResearchEngine:
-    """Wraps Gemini Deep Research API with hybrid execution patterns."""
+    """Wraps Gemini Deep Research Interactions API."""
 
-    # Deep Research model (as per research.md)
-    DEFAULT_MODEL = "gemini-2.0-flash-thinking-exp"
+    # Deep Research model - December 2025 release
+    # Uses Interactions API, NOT generateContent
+    DEFAULT_MODEL = "deep-research-pro-preview-12-2025"
 
-    # Timeout before switching to async (30 seconds per spec)
+    # Timeout before returning async handle (30 seconds per spec)
     SYNC_TIMEOUT_SECONDS = 30
 
-    # Default polling interval
+    # Default polling interval (API recommends 10s)
     DEFAULT_POLL_INTERVAL = 10
 
-    # Maximum wait time (8 hours)
+    # Maximum wait time (60 minutes is API max, we use 8 hours for user config)
     MAX_WAIT_SECONDS = 28800
 
     def __init__(self, client: genai.Client):
@@ -46,11 +46,14 @@ class DeepResearchEngine:
         query: str,
         model: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Start a deep research query.
+        """Start a deep research query using Interactions API.
+
+        The Deep Research agent REQUIRES background=True (async execution).
+        Research typically takes 20 minutes, max 60 minutes.
 
         Args:
             query: The research question/topic
-            model: Optional model override (defaults to DEFAULT_MODEL)
+            model: Optional model override (defaults to deep-research-pro-preview-12-2025)
 
         Returns:
             Dict with interaction_id, status, and initial response info
@@ -59,33 +62,32 @@ class DeepResearchEngine:
         logger.info(f"Starting deep research with model {model_to_use}: {query[:100]}...")
 
         try:
-            # Use async generate_content for deep research
-            response = await asyncio.to_thread(
-                self.client.models.generate_content,
-                model=model_to_use,
-                contents=query,
-                config=types.GenerateContentConfig(
-                    temperature=0.7,
-                    max_output_tokens=8192,
-                )
+            # Use Interactions API (NOT generateContent)
+            # background=True is REQUIRED for deep research
+            interaction = await asyncio.to_thread(
+                self.client.interactions.create,
+                input=query,
+                agent=model_to_use,
+                background=True
             )
 
-            # For deep research models, the response may include an interaction ID
-            # for long-running operations. If not, we treat it as immediately complete.
-            interaction_id = getattr(response, 'id', None) or getattr(response, 'name', None)
+            interaction_id = interaction.id
+            logger.info(f"Research started, interaction_id: {interaction_id}")
 
-            # Check if response completed immediately
-            if response.text:
-                logger.info("Research completed synchronously")
+            # Check initial status
+            status = getattr(interaction, 'status', 'in_progress')
+
+            if status == "completed":
+                # Rare: completed immediately
+                logger.info("Research completed immediately")
                 return {
                     "interaction_id": interaction_id,
                     "status": "completed",
-                    "result": self._parse_response(response),
+                    "result": self._parse_interaction(interaction),
                     "completed_immediately": True
                 }
 
-            # Response is pending async completion
-            logger.info(f"Research started async, interaction_id: {interaction_id}")
+            # Research is running async (expected case)
             return {
                 "interaction_id": interaction_id,
                 "status": "running",
@@ -103,7 +105,7 @@ class DeepResearchEngine:
         poll_interval: int = None,
         max_wait_seconds: int = None
     ) -> Dict[str, Any]:
-        """Poll for research completion.
+        """Poll for research completion using Interactions API.
 
         Args:
             interaction_id: The interaction ID from start_research
@@ -135,14 +137,20 @@ class DeepResearchEngine:
                 )
 
             try:
-                status = await self._get_status(interaction_id)
+                # Use Interactions API to get status
+                interaction = await asyncio.to_thread(
+                    self.client.interactions.get,
+                    interaction_id
+                )
                 poll_count += 1
 
-                state = status.get("state", "unknown")
-                progress = status.get("progress", 0)
-                current_action = status.get("current_action", "Researching...")
+                status = getattr(interaction, 'status', 'unknown')
 
-                logger.debug(f"Poll {poll_count}: state={state}, progress={progress}%")
+                # Estimate progress based on elapsed time (research typically 20 mins)
+                progress = min(95, int((elapsed / 1200) * 100))  # 20 min = 100%
+                current_action = self._get_action_from_status(status, elapsed)
+
+                logger.debug(f"Poll {poll_count}: status={status}, progress~{progress}%")
 
                 # Call progress callback if provided
                 if on_progress:
@@ -151,16 +159,16 @@ class DeepResearchEngine:
                     except Exception as e:
                         logger.warning(f"Progress callback error: {e}")
 
-                if state == "completed":
+                if status == "completed":
                     logger.info(f"Research completed after {poll_count} polls ({elapsed:.1f}s)")
-                    return status.get("result", {})
+                    return self._parse_interaction(interaction)
 
-                elif state == "failed":
-                    error_msg = status.get("error", "Unknown error")
+                elif status == "failed":
+                    error_msg = getattr(interaction, 'error', 'Unknown error')
                     logger.error(f"Research failed: {error_msg}")
                     raise Exception(f"Research failed: {error_msg}")
 
-                # Continue polling
+                # Continue polling (status is "in_progress")
                 await asyncio.sleep(poll_interval)
 
             except asyncio.CancelledError:
@@ -172,34 +180,27 @@ class DeepResearchEngine:
                 logger.warning(f"Poll error (will retry): {e}")
                 await asyncio.sleep(poll_interval)
 
-    async def _get_status(self, interaction_id: str) -> Dict[str, Any]:
-        """Get current status of a research interaction.
+    def _get_action_from_status(self, status: str, elapsed: float) -> str:
+        """Generate human-readable action based on status and elapsed time."""
+        if status == "completed":
+            return "Research complete"
+        elif status == "failed":
+            return "Research failed"
 
-        Note: The actual Gemini Deep Research API polling mechanism may differ.
-        This implementation assumes the response object contains status info.
-        For the thinking model, responses are typically synchronous.
-
-        Args:
-            interaction_id: The interaction ID to check
-
-        Returns:
-            Dict with state, progress, current_action, and optionally result/error
-        """
-        # For gemini-2.0-flash-thinking-exp, responses are typically synchronous.
-        # The polling pattern is primarily for the deep-research-pro-preview model.
-        # This method serves as a placeholder for async status checking.
-
-        # In practice, most "thinking" model responses complete immediately,
-        # so this would return completed status.
-
-        # TODO: When using actual deep-research-pro-preview model,
-        # implement proper interactions.get() polling here
-
-        return {
-            "state": "completed",
-            "progress": 100,
-            "current_action": "Research complete"
-        }
+        # Estimate phase based on typical 20-minute research duration
+        minutes = elapsed / 60
+        if minutes < 2:
+            return "Analyzing query and planning research..."
+        elif minutes < 5:
+            return "Searching and gathering sources..."
+        elif minutes < 10:
+            return "Reading and synthesizing information..."
+        elif minutes < 15:
+            return "Compiling findings..."
+        elif minutes < 20:
+            return "Generating comprehensive report..."
+        else:
+            return "Finalizing research (complex query)..."
 
     async def execute_with_timeout(
         self,
@@ -208,10 +209,10 @@ class DeepResearchEngine:
         timeout_seconds: int = None,
         on_progress: Optional[Callable[[int, str], None]] = None
     ) -> Dict[str, Any]:
-        """Execute research with sync timeout, returning early if exceeds threshold.
+        """Execute research with sync timeout, returning async handle if exceeds threshold.
 
         This implements the hybrid sync-to-async pattern:
-        1. Start research
+        1. Start research via Interactions API
         2. Wait up to timeout_seconds for completion
         3. If completes within timeout, return result
         4. If exceeds timeout, return interaction_id for async polling
@@ -232,7 +233,7 @@ class DeepResearchEngine:
         # Start the research
         start_result = await self.start_research(query, model)
 
-        # If completed immediately, return result
+        # If completed immediately (rare), return result
         if start_result.get("completed_immediately"):
             return {
                 "status": "completed",
@@ -247,7 +248,7 @@ class DeepResearchEngine:
                 self.poll_until_complete(
                     interaction_id,
                     on_progress=on_progress,
-                    poll_interval=2  # Poll more frequently during sync phase
+                    poll_interval=5  # Poll more frequently during sync phase
                 ),
                 timeout=timeout
             )
@@ -262,11 +263,11 @@ class DeepResearchEngine:
                 "interaction_id": interaction_id
             }
 
-    def _parse_response(self, response) -> Dict[str, Any]:
-        """Parse a Gemini response into structured result.
+    def _parse_interaction(self, interaction) -> Dict[str, Any]:
+        """Parse an Interaction response into structured result.
 
         Args:
-            response: The Gemini API response object
+            interaction: The Interactions API response object
 
         Returns:
             Dict with report, sources, and metadata
@@ -276,40 +277,45 @@ class DeepResearchEngine:
         metadata: Dict[str, Any] = {}
 
         try:
-            # Extract text content
-            if hasattr(response, 'text'):
-                report_text = response.text
-            elif hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'content') and candidate.content.parts:
-                    report_text = candidate.content.parts[0].text
+            # Extract text from interaction outputs
+            outputs = getattr(interaction, 'outputs', [])
+            if outputs:
+                # Get the last output (final result)
+                last_output = outputs[-1]
+                if hasattr(last_output, 'text'):
+                    report_text = last_output.text
 
-            # Extract usage metadata if available
-            if hasattr(response, 'usage_metadata'):
-                usage = response.usage_metadata
+            # Extract metadata
+            metadata['interaction_id'] = getattr(interaction, 'id', None)
+            metadata['status'] = getattr(interaction, 'status', None)
+
+            # Extract usage if available
+            if hasattr(interaction, 'usage_metadata'):
+                usage = interaction.usage_metadata
                 metadata['tokens_input'] = getattr(usage, 'prompt_token_count', 0)
                 metadata['tokens_output'] = getattr(usage, 'candidates_token_count', 0)
 
-            # Extract grounding sources if available (for research-grounded responses)
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                if hasattr(candidate, 'grounding_metadata'):
-                    grounding = candidate.grounding_metadata
-                    if hasattr(grounding, 'web_search_queries'):
-                        metadata['search_queries'] = grounding.web_search_queries
-                    if hasattr(grounding, 'grounding_chunks'):
-                        for chunk in grounding.grounding_chunks:
-                            if hasattr(chunk, 'web'):
-                                sources.append(Source(
-                                    title=getattr(chunk.web, 'title', 'Unknown'),
-                                    url=getattr(chunk.web, 'uri', ''),
-                                    snippet=getattr(chunk, 'text', '')[:200] if hasattr(chunk, 'text') else ""
-                                ))
+            # Extract sources from grounding metadata if available
+            if hasattr(interaction, 'grounding_metadata'):
+                grounding = interaction.grounding_metadata
+                if hasattr(grounding, 'grounding_chunks'):
+                    for chunk in grounding.grounding_chunks:
+                        if hasattr(chunk, 'web'):
+                            sources.append(Source(
+                                title=getattr(chunk.web, 'title', 'Unknown'),
+                                url=getattr(chunk.web, 'uri', ''),
+                                snippet=getattr(chunk, 'text', '')[:200] if hasattr(chunk, 'text') else ""
+                            ))
 
         except Exception as e:
-            logger.warning(f"Error parsing response: {e}")
-            if hasattr(response, 'text'):
-                report_text = response.text
+            logger.warning(f"Error parsing interaction: {e}")
+            # Fallback: try to get any text content
+            try:
+                outputs = getattr(interaction, 'outputs', [])
+                if outputs and hasattr(outputs[-1], 'text'):
+                    report_text = outputs[-1].text
+            except Exception:
+                pass
 
         return {
             "report": report_text,
@@ -326,7 +332,7 @@ class DeepResearchEngine:
 
         Args:
             task_id: The task ID for this result
-            raw_result: Dict from _parse_response or poll_until_complete
+            raw_result: Dict from _parse_interaction or poll_until_complete
 
         Returns:
             ResearchResult dataclass instance
