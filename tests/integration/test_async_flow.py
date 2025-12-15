@@ -11,11 +11,11 @@ Uses mocked Gemini API for deterministic testing.
 import asyncio
 import pytest
 import uuid
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import patch
 from datetime import datetime, timedelta
 
 # Import deep research modules
-from deep_research import TaskStatus, ResearchTask, ResearchResult, Source
+from deep_research import TaskStatus, ResearchTask
 
 
 class TestAsyncStatusFlow:
@@ -279,7 +279,7 @@ class TestNotificationFlow:
 
         # Mock the notify method
         with patch.object(notifier, 'notify', return_value=True) as mock_notify:
-            result = notifier.notify_research_complete("abc123", 10.0)
+            _result = notifier.notify_research_complete("abc123", 10.0)  # noqa: F841
 
             # verify notify was called
             mock_notify.assert_called_once()

@@ -11,8 +11,7 @@ Uses mocked Gemini API for deterministic testing.
 import asyncio
 import pytest
 import uuid
-from unittest.mock import Mock, patch, AsyncMock, MagicMock
-from datetime import datetime
+from unittest.mock import Mock, MagicMock
 
 # Import deep research modules
 from deep_research import TaskStatus, ResearchTask, ResearchResult, Source
@@ -104,7 +103,7 @@ class TestSyncCompletionFlow:
         from deep_research.state_manager import StateManager
 
         # Setup
-        state_manager = StateManager(db_path=temp_db)
+        _state_manager = StateManager(db_path=temp_db)  # noqa: F841
 
         # Configure mock to return immediately
         mock_response = MockGeminiResponse(
@@ -147,7 +146,6 @@ class TestSyncCompletionFlow:
     def test_get_research_results_after_completion(self, temp_db):
         """Test retrieving results after sync completion."""
         from deep_research.state_manager import StateManager
-        from deep_research import ResearchResult, Source
 
         state_manager = StateManager(db_path=temp_db)
 
@@ -451,7 +449,7 @@ class TestEndToEndFlow:
 
         # Initialize components
         state_manager = StateManager(db_path=temp_db)
-        background_manager = BackgroundTaskManager()
+        _background_manager = BackgroundTaskManager()  # noqa: F841
 
         # Configure mock for immediate completion
         mock_response = MockGeminiResponse(

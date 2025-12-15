@@ -6,7 +6,6 @@ Uses heuristics to predict whether research will complete synchronously or
 require async background execution.
 """
 
-import re
 from typing import Tuple
 
 from . import CostEstimate

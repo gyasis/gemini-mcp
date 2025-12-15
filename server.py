@@ -14,7 +14,6 @@ Features Gemini Deep Research tools with SQLite persistence and asyncio backgrou
 
 import os
 import base64
-import asyncio
 import logging
 import uuid
 import json
@@ -24,7 +23,6 @@ from datetime import datetime
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 import mimetypes
-import tempfile
 
 # Configure logging for deep research
 logging.basicConfig(level=logging.INFO)
@@ -68,10 +66,10 @@ except Exception as e:
 
 # Initialize deep research components (SQLite + asyncio for zero external deps)
 try:
-    from deep_research import TaskStatus, ResearchTask, ResearchResult
+    from deep_research import TaskStatus, ResearchTask
     from deep_research.state_manager import StateManager
-    from deep_research.background import BackgroundTaskManager, get_background_manager
-    from deep_research.notification import NativeNotifier, get_notifier
+    from deep_research.background import get_background_manager
+    from deep_research.notification import get_notifier
     from deep_research.engine import DeepResearchEngine
 
     # Initialize state manager (SQLite persistence)
@@ -1262,7 +1260,7 @@ def gemini_research(topic: str) -> str:
         )
         
         return f"🤖 GEMINI RESEARCH RESPONSE:\n\n{response.text}"
-    except Exception as e:
+    except Exception:
         # Fallback to regular content generation if grounding fails
         result = call_gemini(f"Research and provide current information about: {topic}", 0.3)
         return f"🤖 GEMINI RESEARCH RESPONSE (fallback):\n\n{result}\n\n[Note: Used fallback mode - grounding may not be available]"
@@ -1663,7 +1661,6 @@ def list_uploaded_files(
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
 
-    import json
     from datetime import datetime, timezone
 
     try:
@@ -1825,7 +1822,6 @@ def get_last_uploaded_video() -> str:
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
 
-    import json
     from datetime import datetime, timezone
 
     try:
@@ -1980,7 +1976,6 @@ def delete_uploaded_file(file_name: str, confirmed: bool = False) -> str:
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
 
-    import json
 
     try:
         # First, get file info
@@ -2125,7 +2120,6 @@ def watch_video(
     if not GEMINI_AVAILABLE or not client:
         return f"🤖 GEMINI RESPONSE:\n\nGemini not available: {GEMINI_ERROR}"
 
-    import json
     import time
 
     try:
@@ -2138,7 +2132,7 @@ def watch_video(
                 return f"🤖 GEMINI RESPONSE:\n\nFile {file_uri} is not ready (state: {file_info.state}). Use check_file_status('{file_uri}') to monitor progress."
 
             if not prompt:
-                return f"🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
+                return "🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
 
             # File is ready, analyze it
             response = client.models.generate_content(
@@ -2159,12 +2153,12 @@ def watch_video(
 
         # Validate input_path is provided
         if not input_path:
-            return f"🤖 GEMINI RESPONSE:\n\nError: Either 'input_path' or 'file_uri' must be provided."
+            return "🤖 GEMINI RESPONSE:\n\nError: Either 'input_path' or 'file_uri' must be provided."
 
         # Handle YouTube URLs
         if is_youtube_url(input_path):
             if not prompt:
-                return f"🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
+                return "🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
 
             # For YouTube videos, include URL in the prompt
             full_prompt = f"{prompt}\n\nAnalyze this YouTube video: {input_path}"
@@ -2214,7 +2208,7 @@ def watch_video(
 
                 # MODE 1: Auto-analyze (poll until ready)
                 if not prompt:
-                    return f"🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when auto_analyze=True."
+                    return "🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when auto_analyze=True."
 
                 # Poll for file readiness
                 elapsed_time = 0
@@ -2227,7 +2221,7 @@ def watch_video(
 
                 # Check final state
                 if file_obj.state == "FAILED":
-                    return f"🤖 GEMINI RESPONSE:\n\nError: File processing failed. Please try uploading again."
+                    return "🤖 GEMINI RESPONSE:\n\nError: File processing failed. Please try uploading again."
 
                 if file_obj.state != "ACTIVE":
                     return f"🤖 GEMINI RESPONSE:\n\nTimeout: File is still processing after {elapsed_time} seconds (state: {file_obj.state}). Use check_file_status('{uploaded_file.name}') to continue monitoring."
@@ -2256,7 +2250,7 @@ def watch_video(
             else:
                 # For smaller files, include inline (no upload/polling needed)
                 if not prompt:
-                    return f"🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
+                    return "🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
 
                 with open(file_path, 'rb') as f:
                     video_data = f.read()

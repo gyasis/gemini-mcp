@@ -12,11 +12,10 @@ Uses mocked Gemini API for deterministic testing.
 import asyncio
 import pytest
 import uuid
-from unittest.mock import Mock, patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime
 
 # Import deep research modules
-from deep_research import TaskStatus, ResearchTask, ResearchResult, Source, CostEstimate
+from deep_research import TaskStatus, ResearchTask, ResearchResult, Source
 from deep_research.cost_estimator import CostEstimator, get_cost_estimator
 
 
@@ -29,7 +28,7 @@ class TestCancelWithPartialSave:
         from deep_research.background import BackgroundTaskManager
 
         state_manager = StateManager(db_path=temp_db)
-        background_manager = BackgroundTaskManager()
+        _background_manager = BackgroundTaskManager()  # noqa: F841
 
         task_id = str(uuid.uuid4())
 
