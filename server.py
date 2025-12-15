@@ -552,6 +552,131 @@ def get_research_results(
     return response
 
 
+@mcp.tool()
+def check_research_status(task_id: str) -> Dict[str, Any]:
+    """Check status of a running deep research task.
+
+    **Zero Token Cost** - Reads from local SQLite database, no Gemini API calls.
+
+    Use this tool to monitor the progress of async research tasks. It provides
+    real-time status including progress percentage, current action, elapsed time,
+    and estimated completion time.
+
+    Args:
+        task_id: Task UUID from start_deep_research response
+
+    Returns:
+        Dict with task status, progress, elapsed time, and other details
+
+    Example:
+        >>> status = check_research_status("550e8400-e29b-41d4-a716-446655440000")
+        >>> if status["status"] == "completed":
+        ...     print("Research complete! Use get_research_results to retrieve.")
+        >>> else:
+        ...     print(f"Progress: {status['progress']}% - {status['current_action']}")
+    """
+    # Check availability
+    if not state_manager:
+        return {
+            "success": False,
+            "error": "SQLITE_ERROR",
+            "message": "State manager not available",
+            "suggestion": "Check server initialization"
+        }
+
+    # Validate task_id format (basic UUID check)
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {
+            "success": False,
+            "error": "INVALID_QUERY",
+            "message": f"Invalid task_id format: {task_id}",
+            "suggestion": "Provide a valid UUID from start_deep_research"
+        }
+
+    # Get task from SQLite
+    task = state_manager.get_task(task_id)
+    if not task:
+        return {
+            "success": False,
+            "error": "TASK_NOT_FOUND",
+            "message": f"No research task found with ID: {task_id}",
+            "suggestion": "Verify task_id from start_deep_research response"
+        }
+
+    # Calculate elapsed time
+    elapsed_seconds = 0
+    if task.created_at:
+        elapsed_seconds = (datetime.utcnow() - task.created_at).total_seconds()
+    elapsed_minutes = round(elapsed_seconds / 60, 2)
+
+    # Calculate estimated completion (if we have progress)
+    estimated_completion_minutes = None
+    if task.progress > 0 and task.progress < 100:
+        # Linear estimation based on current progress
+        estimated_total = elapsed_minutes / (task.progress / 100)
+        estimated_completion_minutes = round(estimated_total - elapsed_minutes, 2)
+
+    # Calculate cost so far
+    cost_so_far = round(
+        task.tokens_input * 0.000001 + task.tokens_output * 0.000004, 4
+    )
+
+    # Build response based on status
+    if task.status == TaskStatus.COMPLETED:
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "completed",
+            "progress": 100,
+            "current_action": "Research complete",
+            "elapsed_minutes": elapsed_minutes,
+            "message": f"Use get_research_results(task_id='{task_id}') to retrieve results"
+        }
+
+    elif task.status == TaskStatus.FAILED:
+        return {
+            "success": False,
+            "task_id": task_id,
+            "status": "failed",
+            "progress": task.progress,
+            "error_message": task.error_message or "Unknown error",
+            "elapsed_minutes": elapsed_minutes
+        }
+
+    elif task.status == TaskStatus.CANCELLED:
+        return {
+            "success": True,
+            "task_id": task_id,
+            "status": "cancelled",
+            "progress": task.progress,
+            "elapsed_minutes": elapsed_minutes,
+            "message": "Research was cancelled"
+        }
+
+    else:
+        # Running or running_async
+        response = {
+            "success": True,
+            "task_id": task_id,
+            "status": task.status.value,
+            "progress": task.progress,
+            "current_action": task.current_action or "Processing...",
+            "elapsed_minutes": elapsed_minutes,
+            "tokens_used": {
+                "input": task.tokens_input,
+                "output": task.tokens_output
+            },
+            "cost_so_far": cost_so_far
+        }
+
+        if estimated_completion_minutes is not None:
+            response["estimated_completion_minutes"] = estimated_completion_minutes
+
+        return response
+
+
 # ============================================================================
 # Original Gemini Tools
 # ============================================================================

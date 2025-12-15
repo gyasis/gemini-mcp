@@ -20,6 +20,7 @@ tags: []
 ### Deep Research System Dependencies (v3.6.0+)
 - **notify-py (>=0.3.42)**: Cross-platform desktop notifications (optional, with fallback)
 - **Jinja2 (>=3.1.0)**: Markdown report template rendering
+- **pytest (>=7.0.0)**: Testing framework for integration tests
 - **sqlite3**: SQLite database (Python stdlib - no external dependency)
 - **asyncio**: Asynchronous task management (Python stdlib - no external dependency)
 
@@ -202,19 +203,38 @@ claude_code-gemini-mcp/
 ├── generate_config.sh  # Client configuration helper
 ├── .env               # Environment variables (gitignored)
 ├── CLAUDE.md         # Development documentation
-└── memory-bank/      # Project documentation
+├── memory-bank/      # Project documentation
+├── deep_research/    # Deep research module (v3.6.0+)
+│   ├── __init__.py        # Data models
+│   ├── state_manager.py   # SQLite persistence
+│   ├── notification.py    # Cross-platform notifications
+│   ├── background.py      # asyncio task manager
+│   ├── engine.py          # DeepResearchEngine
+│   ├── cost_estimator.py  # Cost estimation (stub)
+│   └── storage.py         # Markdown storage (stub)
+├── tests/            # Test infrastructure (v3.6.0+)
+│   ├── __init__.py
+│   └── integration/
+│       ├── __init__.py
+│       └── test_deep_research_flow.py
+└── research_reports/ # Research output directory
 ```
 
 ### Code Organization
-- **Single Module**: All code in `server.py` for simplicity
+- **Main Server**: Core MCP tools in `server.py`
+- **Deep Research Module**: Modular architecture in `deep_research/` package
 - **Tool Functions**: Decorated functions for MCP tools
 - **Configuration**: Environment-based with validation
 - **Error Handling**: Consistent patterns across tools
+- **Testing**: Integration tests in `tests/integration/` directory
 
 ### Development Workflow
 1. **Setup**: `uv sync` installs all dependencies
 2. **Run**: `uv run python server.py` starts server
-3. **Test**: Manual testing with MCP clients
+3. **Test**:
+   - Manual testing with MCP clients
+   - Integration tests: `pytest tests/integration/`
+   - Unit tests: `pytest tests/` (when available)
 4. **Deploy**: Copy files + run setup script
 
 ## Deployment Considerations
@@ -237,23 +257,36 @@ claude_code-gemini-mcp/
 - **Input Validation**: Rely on MCP SDK
 - **Network**: Outbound only (no listening ports)
 
-## Testing Strategy (Future)
+## Testing Strategy
 
-### Unit Testing
+### Integration Testing (v3.6.0+)
+- **Framework**: pytest
+- **Coverage**: Deep research flow testing in `tests/integration/test_deep_research_flow.py`
+- **Test Cases**:
+  - Sync completion path (research completes within 30s)
+  - Async switch after timeout (research takes >30s)
+  - State persistence and recovery (server restart scenarios)
+  - Result retrieval (get_research_results validation)
+- **Mocking**: Mock Gemini API for reproducible tests
+- **Execution**: `pytest tests/integration/`
+
+### Unit Testing (Future)
 - Test individual tool functions
-- Mock Gemini API responses
+- Mock Gemini API responses for core tools
 - Validate error handling
+- Deep research module unit tests
 
-### Integration Testing
+### End-to-End Testing (Future)
 - Full MCP client/server interaction
 - Configuration generation testing
 - Error scenario validation
+- Multi-tool workflow testing
 
 ### Development Tools
-- **Linting**: Could add ruff or flake8
-- **Type Checking**: Could add mypy
-- **Testing**: Could add pytest
-- **CI/CD**: Could add GitHub Actions
+- **Testing**: pytest (implemented for integration tests)
+- **Linting**: Could add ruff or flake8 (future)
+- **Type Checking**: Could add mypy (future)
+- **CI/CD**: Could add GitHub Actions (future)
 
 ## Performance Characteristics
 
