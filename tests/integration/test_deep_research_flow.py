@@ -159,7 +159,7 @@ class TestSyncCompletionFlow:
             status=TaskStatus.COMPLETED,
             progress=100
         )
-        state_manager.create_task(task)
+        state_manager.save_task(task)
 
         # Save result
         result = ResearchResult(
@@ -174,10 +174,10 @@ class TestSyncCompletionFlow:
             ],
             metadata={"tokens_input": 100, "tokens_output": 500}
         )
-        state_manager.save_result(result)
+        state_manager.save_result(task_id, result)
 
         # Update task status
-        state_manager.update_task(task_id, status=TaskStatus.COMPLETED, progress=100)
+        state_manager.update_task(task_id, {"status": TaskStatus.COMPLETED, "progress": 100})
 
         # Retrieve and verify
         retrieved_result = state_manager.get_result(task_id)
@@ -277,7 +277,7 @@ class TestStateManagerIntegration:
             query="Test query",
             status=TaskStatus.PENDING
         )
-        state_manager.create_task(task)
+        state_manager.save_task(task)
 
         # Verify created
         retrieved = state_manager.get_task(task_id)
@@ -285,7 +285,7 @@ class TestStateManagerIntegration:
         assert retrieved.status == TaskStatus.PENDING
 
         # Update to running
-        state_manager.update_task(task_id, status=TaskStatus.RUNNING, progress=25)
+        state_manager.update_task(task_id, {"status": TaskStatus.RUNNING, "progress": 25})
         retrieved = state_manager.get_task(task_id)
         assert retrieved.status == TaskStatus.RUNNING
         assert retrieved.progress == 25
@@ -293,8 +293,7 @@ class TestStateManagerIntegration:
         # Update to async
         state_manager.update_task(
             task_id,
-            status=TaskStatus.RUNNING_ASYNC,
-            interaction_id="gemini-interaction-abc"
+            {"status": TaskStatus.RUNNING_ASYNC, "interaction_id": "gemini-interaction-abc"}
         )
         retrieved = state_manager.get_task(task_id)
         assert retrieved.status == TaskStatus.RUNNING_ASYNC
@@ -303,10 +302,7 @@ class TestStateManagerIntegration:
         # Complete
         state_manager.update_task(
             task_id,
-            status=TaskStatus.COMPLETED,
-            progress=100,
-            tokens_input=150,
-            tokens_output=800
+            {"status": TaskStatus.COMPLETED, "progress": 100, "tokens_input": 150, "tokens_output": 800}
         )
         retrieved = state_manager.get_task(task_id)
         assert retrieved.status == TaskStatus.COMPLETED
@@ -334,7 +330,7 @@ class TestStateManagerIntegration:
                 status=status,
                 interaction_id=interaction_id
             )
-            state_manager.create_task(task)
+            state_manager.save_task(task)
 
         # Get incomplete tasks
         incomplete = state_manager.get_incomplete_tasks()
@@ -472,10 +468,10 @@ class TestEndToEndFlow:
             query="What is machine learning?",
             status=TaskStatus.PENDING
         )
-        state_manager.create_task(task)
+        state_manager.save_task(task)
 
         # Step 2: Start research
-        state_manager.update_task(task_id, status=TaskStatus.RUNNING)
+        state_manager.update_task(task_id, {"status": TaskStatus.RUNNING})
         result = await engine.execute_with_timeout(
             query=task.query,
             timeout_seconds=30
@@ -488,11 +484,10 @@ class TestEndToEndFlow:
                 task_id=task_id,
                 raw_result=result["result"]
             )
-            state_manager.save_result(research_result)
+            state_manager.save_result(task_id, research_result)
             state_manager.update_task(
                 task_id,
-                status=TaskStatus.COMPLETED,
-                progress=100
+                {"status": TaskStatus.COMPLETED, "progress": 100}
             )
 
         # Step 4: Retrieve result

@@ -889,6 +889,129 @@ def estimate_research_cost(query: str) -> Dict[str, Any]:
     }
 
 
+@mcp.tool()
+def save_research_to_markdown(
+    task_id: str,
+    output_dir: str = "./research_reports",
+    filename_prefix: str = "research",
+    include_metadata: bool = True,
+    include_sources: bool = True
+) -> Dict[str, Any]:
+    """Save completed research to permanent Markdown file using Jinja2 templates.
+
+    Use this tool after research completes to save results to a well-formatted
+    Markdown file. Reports are organized by month for easy retrieval.
+
+    **Zero Token Cost**: This tool uses local Jinja2 templates only - no Gemini API calls.
+
+    **File Organization**:
+    Reports are saved in month-organized directories:
+    `{output_dir}/2025-12/research_550e8400_20251214_103045.md`
+
+    **Sections Included**:
+    - Title and metadata (query, cost, duration, tokens)
+    - Full research report (Markdown)
+    - Sources with URLs and relevance scores
+
+    Args:
+        task_id: Task UUID from start_deep_research response.
+        output_dir: Directory for output files (default: ./research_reports).
+        filename_prefix: Prefix for filename (default: "research").
+        include_metadata: Include metadata section in output (default: True).
+        include_sources: Include sources section in output (default: True).
+
+    Returns:
+        Dict with file_path, filename, file_size_kb, and sections_included.
+    """
+    if not DEEP_RESEARCH_AVAILABLE:
+        return {
+            "success": False,
+            "error": "DEEP_RESEARCH_NOT_AVAILABLE",
+            "message": f"Deep research module not available: {DEEP_RESEARCH_ERROR}"
+        }
+
+    # Validate UUID format
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {
+            "success": False,
+            "error": "INVALID_TASK_ID",
+            "message": "Invalid task_id format. Expected UUID v4."
+        }
+
+    # Get task from database
+    task = state_manager.get_task(task_id)
+    if not task:
+        return {
+            "success": False,
+            "error": "TASK_NOT_FOUND",
+            "message": f"No research task found with ID: {task_id}",
+            "suggestion": "Verify task_id from start_deep_research response"
+        }
+
+    # Check if task is completed
+    if task.status != TaskStatus.COMPLETED:
+        return {
+            "success": False,
+            "error": "RESEARCH_NOT_COMPLETED",
+            "task_id": task_id,
+            "status": task.status.value,
+            "progress": task.progress,
+            "message": f"Cannot save: research {'still in progress' if task.status in [TaskStatus.RUNNING, TaskStatus.RUNNING_ASYNC] else 'not completed'} ({task.progress}%)",
+            "suggestion": "Wait for completion before saving to Markdown"
+        }
+
+    # Get research result
+    result = state_manager.get_result(task_id)
+    if not result:
+        return {
+            "success": False,
+            "error": "RESULT_NOT_FOUND",
+            "task_id": task_id,
+            "message": "Research completed but results not found in database",
+            "suggestion": "Results may have been deleted. Cannot save."
+        }
+
+    # Use MarkdownStorage to save the report
+    from deep_research.storage import get_markdown_storage
+
+    storage = get_markdown_storage(output_dir)
+
+    # Prepare task data for the template
+    task_data = {
+        "status": task.status.value,
+        "created_at": task.created_at.isoformat() if task.created_at else None,
+        "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+        "tokens_input": task.tokens_input,
+        "tokens_output": task.tokens_output,
+        "cost_usd": task.cost_usd,
+        "model": task.model
+    }
+
+    try:
+        save_result = storage.save_report(
+            task_id=task_id,
+            query=task.query,
+            report=result.report,
+            sources=result.sources,
+            metadata=result.metadata,
+            task_data=task_data,
+            prefix=filename_prefix,
+            include_metadata=include_metadata,
+            include_sources=include_sources
+        )
+        return save_result
+    except Exception as e:
+        logger.error(f"Failed to save research to markdown: {e}")
+        return {
+            "success": False,
+            "error": "SAVE_FAILED",
+            "task_id": task_id,
+            "message": f"Failed to save report: {str(e)}"
+        }
+
+
 # ============================================================================
 # Original Gemini Tools
 # ============================================================================
