@@ -6,12 +6,19 @@ Enables a primary AI assistant to collaborate with Google's Gemini AI using the 
 
 import os
 import base64
+import asyncio
+import logging
 from typing import Optional, List, Union
 from pathlib import Path
+from datetime import datetime
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 import mimetypes
 import tempfile
+
+# Configure logging for deep research
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Build an absolute path to the .env file
 # This ensures it's found regardless of the script's working directory
@@ -44,6 +51,164 @@ except Exception as e:
     GEMINI_AVAILABLE = False
     GEMINI_ERROR = str(e)
     client = None
+
+# ============================================================================
+# Deep Research Module Initialization
+# ============================================================================
+
+# Initialize deep research components (SQLite + asyncio for zero external deps)
+try:
+    from deep_research import TaskStatus, ResearchTask, ResearchResult
+    from deep_research.state_manager import StateManager
+    from deep_research.background import BackgroundTaskManager, get_background_manager
+    from deep_research.notification import NativeNotifier, get_notifier
+    from deep_research.engine import DeepResearchEngine
+
+    # Initialize state manager (SQLite persistence)
+    state_manager = StateManager()
+
+    # Initialize background task manager (asyncio-based)
+    background_manager = get_background_manager()
+
+    # Initialize notifier (cross-platform desktop notifications)
+    notifier = get_notifier()
+
+    # Initialize deep research engine (only if Gemini client available)
+    if GEMINI_AVAILABLE and client:
+        deep_research_engine = DeepResearchEngine(client)
+        DEEP_RESEARCH_AVAILABLE = True
+        DEEP_RESEARCH_ERROR = None
+    else:
+        deep_research_engine = None
+        DEEP_RESEARCH_AVAILABLE = False
+        DEEP_RESEARCH_ERROR = "Gemini client not available"
+
+    logger.info("Deep research module initialized successfully")
+
+except ImportError as e:
+    state_manager = None
+    background_manager = None
+    notifier = None
+    deep_research_engine = None
+    DEEP_RESEARCH_AVAILABLE = False
+    DEEP_RESEARCH_ERROR = f"Deep research module not found: {e}"
+    logger.warning(f"Deep research module not available: {e}")
+
+except Exception as e:
+    state_manager = None
+    background_manager = None
+    notifier = None
+    deep_research_engine = None
+    DEEP_RESEARCH_AVAILABLE = False
+    DEEP_RESEARCH_ERROR = str(e)
+    logger.error(f"Failed to initialize deep research: {e}")
+
+
+# ============================================================================
+# Deep Research Startup Recovery
+# ============================================================================
+
+async def _continue_research(task_id: str, interaction_id: str):
+    """Resume polling for an incomplete task after server restart.
+
+    Args:
+        task_id: The research task ID
+        interaction_id: The Gemini interaction ID for polling
+    """
+    if not deep_research_engine or not state_manager:
+        logger.error(f"Cannot resume task {task_id}: deep research not available")
+        return
+
+    try:
+        task = state_manager.get_task(task_id)
+        if not task:
+            logger.warning(f"Task {task_id} not found in database")
+            return
+
+        logger.info(f"Resuming research task {task_id}")
+
+        # Update task status
+        state_manager.update_task(task_id, {
+            "status": TaskStatus.RUNNING_ASYNC,
+            "current_action": "Resuming after restart..."
+        })
+
+        # Continue polling
+        result = await deep_research_engine.poll_until_complete(
+            interaction_id,
+            on_progress=lambda p, a: state_manager.update_task(
+                task_id, {"progress": p, "current_action": a}
+            )
+        )
+
+        # Create and save result
+        research_result = deep_research_engine.create_research_result(task_id, result)
+        state_manager.save_result(task_id, research_result)
+        state_manager.update_task(task_id, {
+            "status": TaskStatus.COMPLETED,
+            "completed_at": datetime.utcnow(),
+            "progress": 100
+        })
+
+        # Send notification if enabled
+        if task.enable_notifications and notifier:
+            duration_minutes = (datetime.utcnow() - task.created_at).total_seconds() / 60
+            notifier.notify_research_complete(task_id, duration_minutes)
+
+        logger.info(f"Successfully resumed and completed task {task_id}")
+
+    except Exception as e:
+        logger.error(f"Failed to resume task {task_id}: {e}")
+        if state_manager:
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.FAILED,
+                "error_message": f"Resume failed: {str(e)}"
+            })
+        if notifier:
+            notifier.notify_research_failed(task_id, str(e))
+
+
+def on_server_startup():
+    """Resume incomplete tasks from SQLite on server startup."""
+    if not state_manager or not background_manager:
+        logger.debug("Deep research not available, skipping startup recovery")
+        return
+
+    try:
+        incomplete_tasks = state_manager.get_incomplete_tasks()
+        if not incomplete_tasks:
+            logger.debug("No incomplete research tasks to resume")
+            return
+
+        logger.info(f"Found {len(incomplete_tasks)} incomplete research tasks to resume")
+
+        for task_id, interaction_id in incomplete_tasks:
+            if interaction_id:
+                # Spawn asyncio task to resume polling
+                background_manager.start_task(
+                    task_id,
+                    _continue_research(task_id, interaction_id),
+                    on_error=lambda tid, e: logger.error(f"Resume failed for {tid}: {e}")
+                )
+                logger.info(f"Spawned recovery task for {task_id}")
+            else:
+                # No interaction_id means task never got an API response - mark as failed
+                state_manager.update_task(task_id, {
+                    "status": TaskStatus.FAILED,
+                    "error_message": "Task interrupted before API response (no interaction_id)"
+                })
+                logger.warning(f"Marked task {task_id} as failed (no interaction_id)")
+
+    except Exception as e:
+        logger.error(f"Startup recovery failed: {e}")
+
+
+# Run startup recovery when module loads
+on_server_startup()
+
+# ============================================================================
+# Original Gemini Tools
+# ============================================================================
 
 def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-2.0-flash-001") -> str:
     """Call Gemini using the new unified SDK and return response"""
