@@ -191,6 +191,45 @@ def gemini_research(topic: str) -> str:
 - **Benefit**: Reduces hallucinations and provides more accurate information for research-oriented queries.
 - **Use Case**: Ideal for questions about current events, technical topics, or anything requiring real-time data.
 
+### 6. Deep Research System Architecture (Feature 001 - v3.6.0+)
+
+**Pattern**: Hybrid sync-to-async execution with SQLite persistence
+
+**Implementation**:
+```python
+# Wave 1-2 Foundation Components
+deep_research/
+├── __init__.py           # Data models (TaskStatus, Source, TokenUsage, etc.)
+├── state_manager.py      # SQLite + WAL mode persistence
+├── notification.py       # Cross-platform desktop notifications
+├── background.py         # asyncio task lifecycle management
+├── engine.py            # DeepResearchEngine (Wave 3)
+├── cost_estimator.py    # CostEstimator (Wave 6)
+└── storage.py           # MarkdownStorage with Jinja2 (Wave 8)
+```
+
+**Key Architectural Decisions**:
+- **Zero External Dependencies**: Core functionality uses only Python stdlib (SQLite, asyncio)
+- **WAL Mode**: Write-Ahead Logging enables concurrent reads during background execution
+- **Hybrid Execution**: 30-second sync timeout before switching to async background task
+- **Crash Recovery**: SQLite persistence enables server restart without losing state
+- **Notification Fallback Chain**: notify-py → CLI tools (notify-send/osascript) → console logging
+
+**Data Flow**:
+1. User starts research via `start_deep_research` tool
+2. System attempts sync completion (30s timeout)
+3. If timeout: save state to SQLite, spawn background asyncio task
+4. Background task polls Gemini Deep Research API, updates progress in SQLite
+5. On completion: save results to SQLite, send desktop notification
+6. User retrieves results via `get_research_results` (zero token cost - reads from SQLite)
+
+**State Management**:
+- `research_tasks` table: task metadata, status, progress, tokens, cost
+- `research_results` table: completed reports, sources, metadata
+- Automatic recovery on server restart for incomplete tasks
+
+**Implementation Status**: Wave 1-2 complete (8/30 tasks), Wave 3 pending API research
+
 ## Gemini Interaction Modes
 
 These modes define how the primary assistant collaborates with Gemini.

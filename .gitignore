@@ -37,3 +37,8 @@ watch_video_tool/
 *_PRD.md
 gemini_mcp.md
 llm-usage-prompt.md
+
+# Deep Research outputs
+research_reports/*.md
+!research_reports/.gitkeep
+deep_research.db

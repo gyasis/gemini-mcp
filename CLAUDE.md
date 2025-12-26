@@ -47,6 +47,29 @@ The server exposes six main Gemini integration tools:
 5. **gemini_research**: Research with Google Search grounding
 6. **watch_video**: Analyze YouTube videos (by URL) or local video files
 
+### Deep Research Tools (v3.7.0)
+
+Six specialized tools for long-running research with SQLite persistence:
+
+1. **start_deep_research**: Hybrid sync-to-async research execution
+   - Tries sync for 30s, auto-switches to async for complex queries
+   - Returns task_id for tracking, optional desktop notifications
+2. **check_research_status**: Monitor async task progress
+   - Real-time progress % and current action
+   - Works for both sync-completed and async tasks
+3. **get_research_results**: Zero-cost result retrieval from SQLite
+   - Pulls completed reports with sources and metadata
+   - No additional API calls needed
+4. **cancel_research**: Stop running tasks with optional partial saves
+   - Graceful cancellation with cleanup
+   - Option to save partial results before stopping
+5. **estimate_research_cost**: Pre-execution cost analysis
+   - Query complexity classification (simple/medium/complex)
+   - Token and USD estimates before committing
+6. **save_research_to_markdown**: Export results to formatted Markdown files
+   - Jinja2-templated reports with sources and metadata
+   - Organized by month in ./research_reports/
+
 ### Error Handling
 
 - Graceful degradation when Gemini API is unavailable  
@@ -55,22 +78,37 @@ The server exposes six main Gemini integration tools:
 
 ## Dependencies
 
-- `mcp>=0.5.0`: Official Anthropic MCP SDK
-- `google-generativeai>=0.8.5`: Gemini API client
-- `python-dotenv>=0.21.0`: Environment variable management
+- `fastmcp>=2.0.0`: FastMCP server abstraction
+- `google-genai>=0.3.0`: Unified Google Gen AI SDK
+- `python-dotenv>=1.1.0`: Environment variable management
+- `notify-py>=0.3.0`: Cross-platform desktop notifications
+- `jinja2>=3.1.0`: Markdown report templating
 
 ## Development Notes
 
+- **Version 3.7.0**: Added Gemini Deep Research tools with SQLite persistence and asyncio
+- **Version 3.6.0**: Added file management system for Gemini storage
 - **Version 3.1.0**: Added watch_video tool for video analysis
 - **Version 3.0.0**: Migrated to unified Google Gen AI SDK
 - **Version 2.0.0**: Refactored to use official MCP SDK
 - Uses FastMCP server for simplified protocol handling
 - @mcp.tool() decorators automatically generate JSON schemas from type hints
 - No manual JSON-RPC handling required
-- Uses Gemini 2.0 Flash model with 8192 max output tokens
+- Uses Gemini 3 Flash model (gemini-3-flash-preview) with 8192 max output tokens
 - All Gemini responses are prefixed with "🤖 GEMINI RESPONSE:" for clarity
 - Temperature defaults: 0.5 (general), 0.2 (code review/debug), 0.7 (brainstorm)
 - Video processing: YouTube URLs sent directly, local files <20MB inline, >20MB use File API
+
+### Deep Research Architecture (v3.7.0)
+
+- **deep_research/**: Package with SQLite state, async background tasks, and notifications
+- **StateManager**: WAL-mode SQLite with retry logic for concurrent access
+- **BackgroundTaskManager**: asyncio task scheduling and cancellation
+- **DeepResearchEngine**: Hybrid sync-to-async with 30s timeout pattern
+- **CostEstimator**: Pre-execution cost analysis via query complexity
+- **MarkdownStorage**: Jinja2-templated report export to ./research_reports/
+- **NativeNotifier**: Cross-platform desktop notifications (macOS/Windows/Linux)
+- Recovery: Incomplete tasks resumed on server startup via interaction_id
 
 ## Code Improvements in v2.0.0
 
