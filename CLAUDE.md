@@ -94,7 +94,7 @@ Six specialized tools for long-running research with SQLite persistence:
 - Uses FastMCP server for simplified protocol handling
 - @mcp.tool() decorators automatically generate JSON schemas from type hints
 - No manual JSON-RPC handling required
-- Uses Gemini 2.0 Flash model with 8192 max output tokens
+- Uses Gemini 3 Flash model (gemini-3-flash-preview) with 8192 max output tokens
 - All Gemini responses are prefixed with "🤖 GEMINI RESPONSE:" for clarity
 - Temperature defaults: 0.5 (general), 0.2 (code review/debug), 0.7 (brainstorm)
 - Video processing: YouTube URLs sent directly, local files <20MB inline, >20MB use File API

@@ -83,7 +83,8 @@ try:
 
     # Initialize deep research engine (only if Gemini client available)
     if GEMINI_AVAILABLE and client:
-        deep_research_engine = DeepResearchEngine(client)
+        # Pass state_manager for progress snapshot persistence
+        deep_research_engine = DeepResearchEngine(client, state_manager=state_manager)
         DEEP_RESEARCH_AVAILABLE = True
         DEEP_RESEARCH_ERROR = None
     else:
@@ -135,18 +136,29 @@ async def _continue_research(task_id: str, interaction_id: str):
 
         logger.info(f"Resuming research task {task_id}")
 
+        # Load progress history from SQLite for hanging detection
+        saved_snapshots = state_manager.get_progress_snapshots(task_id)
+        if saved_snapshots:
+            loaded = deep_research_engine.hanging_detector.load_history_from_snapshots(
+                task_id, saved_snapshots
+            )
+            logger.info(f"Loaded {loaded} progress snapshots for hanging detection")
+
         # Update task status
         state_manager.update_task(task_id, {
             "status": TaskStatus.RUNNING_ASYNC,
             "current_action": "Resuming after restart..."
         })
 
-        # Continue polling
+        # Continue polling with progress persistence
+        def on_progress_with_persist(progress: int, action: str):
+            state_manager.update_task(task_id, {"progress": progress, "current_action": action})
+            # Note: api_status will be added by engine's record_progress call
+
         result = await deep_research_engine.poll_until_complete(
             interaction_id,
-            on_progress=lambda p, a: state_manager.update_task(
-                task_id, {"progress": p, "current_action": a}
-            )
+            task_id=task_id,
+            on_progress=on_progress_with_persist
         )
 
         # Create and save result
@@ -161,7 +173,9 @@ async def _continue_research(task_id: str, interaction_id: str):
         # Send notification if enabled
         if task.enable_notifications and notifier:
             duration_minutes = (datetime.utcnow() - task.created_at).total_seconds() / 60
-            notifier.notify_research_complete(task_id, duration_minutes)
+            notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
+            if not notification_sent:
+                logger.warning(f"Desktop notification failed for task {task_id} - check DISPLAY/DBUS environment")
 
         logger.info(f"Successfully resumed and completed task {task_id}")
 
@@ -176,8 +190,12 @@ async def _continue_research(task_id: str, interaction_id: str):
             notifier.notify_research_failed(task_id, str(e))
 
 
-def on_server_startup():
-    """Resume incomplete tasks from SQLite on server startup."""
+async def on_server_startup():
+    """Resume incomplete tasks from SQLite on server startup.
+
+    This function runs AFTER the event loop is started (called from main()),
+    ensuring asyncio.create_task() works correctly.
+    """
     if not state_manager or not background_manager:
         logger.debug("Deep research not available, skipping startup recovery")
         return
@@ -190,7 +208,16 @@ def on_server_startup():
 
         logger.info(f"Found {len(incomplete_tasks)} incomplete research tasks to resume")
 
+        # Deduplication to prevent duplicate spawning
+        seen_tasks = set()
+
         for task_id, interaction_id in incomplete_tasks:
+            # Skip duplicates
+            if task_id in seen_tasks:
+                logger.warning(f"Skipping duplicate task {task_id} in incomplete list")
+                continue
+            seen_tasks.add(task_id)
+
             if interaction_id:
                 # Spawn asyncio task to resume polling
                 background_manager.start_task(
@@ -201,18 +228,18 @@ def on_server_startup():
                 logger.info(f"Spawned recovery task for {task_id}")
             else:
                 # No interaction_id means task never got an API response - mark as failed
-                state_manager.update_task(task_id, {
-                    "status": TaskStatus.FAILED,
-                    "error_message": "Task interrupted before API response (no interaction_id)"
-                })
-                logger.warning(f"Marked task {task_id} as failed (no interaction_id)")
+                try:
+                    state_manager.update_task(task_id, {
+                        "status": TaskStatus.FAILED,
+                        "error_message": "Task interrupted before API response (no interaction_id)"
+                    })
+                    logger.warning(f"Marked task {task_id} as failed (no interaction_id)")
+                except Exception as e:
+                    logger.error(f"Failed to mark task {task_id} as failed: {e}")
 
     except Exception as e:
         logger.error(f"Startup recovery failed: {e}")
 
-
-# Run startup recovery when module loads
-on_server_startup()
 
 # ============================================================================
 # Deep Research Tools (Wave 4-5: US1 MVP)
@@ -231,6 +258,11 @@ async def start_deep_research(
     query refinement, and source synthesis. This tool wraps that capability
     with hybrid sync-to-async execution using SQLite for state persistence
     and asyncio for background tasks.
+
+    **Expected Duration**:
+    - Simple queries: 5-15 minutes
+    - Complex queries: 20-40 minutes
+    - Maximum timeout: 60 minutes
 
     **Hybrid Execution Pattern**:
     1. Attempts synchronous completion (30-second timeout)
@@ -397,7 +429,9 @@ async def start_deep_research(
                         duration_minutes = (
                             datetime.utcnow() - task.created_at
                         ).total_seconds() / 60
-                        notifier.notify_research_complete(task_id, duration_minutes)
+                        notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
+                        if not notification_sent:
+                            logger.warning(f"Desktop notification failed for task {task_id[:8]} - check DISPLAY/DBUS environment")
 
                     logger.info(f"Task {task_id[:8]} completed asynchronously")
 
@@ -414,7 +448,7 @@ async def start_deep_research(
             background_manager.start_task(
                 task_id,
                 background_research(),
-                on_error=lambda tid, e: logger.error(f"Background task error: {e}")
+                on_error=lambda tid, e: logger.error(f"Background task error for {tid}: {e}")
             )
 
             logger.info(f"Task {task_id[:8]} switched to async mode")
@@ -680,6 +714,27 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
         if estimated_completion_minutes is not None:
             response["estimated_completion_minutes"] = estimated_completion_minutes
 
+        # Add hanging detection info for long-running tasks
+        if deep_research_engine and elapsed_minutes > 5:
+            try:
+                hanging_status = deep_research_engine.check_hanging(
+                    task_id,
+                    task.created_at
+                )
+                response["hanging_detection"] = {
+                    "is_hanging": hanging_status.is_hanging,
+                    "confidence": round(hanging_status.confidence, 2),
+                    "stall_minutes": round(hanging_status.stall_minutes, 1),
+                    "reason": hanging_status.reason,
+                    "recommendation": hanging_status.recommendation
+                }
+                # Add warning if task appears hung
+                if hanging_status.is_hanging:
+                    response["warning"] = f"Task may be hung: {hanging_status.reason}"
+                    response["suggestion"] = hanging_status.recommendation
+            except Exception as e:
+                logger.debug(f"Could not check hanging status: {e}")
+
         return response
 
 
@@ -823,6 +878,203 @@ def cancel_research(
         response["message"] = "Research cancelled. No partial results available."
 
     return response
+
+
+@mcp.tool()
+async def resume_research(task_id: str) -> Dict[str, Any]:
+    """Resume a failed, hung, or interrupted research task.
+
+    Use this tool when:
+    - A research task was identified as hung by check_research_status
+    - A research task failed but may have partial results
+    - You want to retry a task after a transient error
+    - The server was restarted while research was in progress
+
+    **Zero Token Cost** if the research already completed or failed.
+    **May Use Tokens** if research is still running and needs to continue.
+
+    **Recovery Features**:
+    - Checks if the Gemini interaction is still available
+    - Retrieves any cached intermediate results from streaming
+    - Can return partial results if research cannot be resumed
+    - Continues polling with streaming capture if still running
+
+    Args:
+        task_id: Task UUID from start_deep_research response
+
+    Returns:
+        Dict with resume status:
+        - "completed": Research finished, results available
+        - "resumed": Continuing to poll, check status later
+        - "failed_with_partial": Failed but has partial results
+        - "unrecoverable": Cannot resume, no partial results
+
+    Example:
+        >>> status = check_research_status("550e8400...")
+        >>> if status.get("hanging_detection", {}).get("is_hanging"):
+        ...     result = await resume_research("550e8400...")
+        ...     if result["status"] == "failed_with_partial":
+        ...         print("Got partial results:", result["partial_report"][:200])
+    """
+    if not DEEP_RESEARCH_AVAILABLE:
+        return {
+            "success": False,
+            "error": "DEEP_RESEARCH_NOT_AVAILABLE",
+            "message": f"Deep research module not available: {DEEP_RESEARCH_ERROR}"
+        }
+
+    # Validate UUID format
+    try:
+        uuid.UUID(task_id)
+    except ValueError:
+        return {
+            "success": False,
+            "error": "INVALID_TASK_ID",
+            "message": "Invalid task_id format. Expected UUID v4."
+        }
+
+    # Get task from database
+    task = state_manager.get_task(task_id)
+    if not task:
+        return {
+            "success": False,
+            "error": "TASK_NOT_FOUND",
+            "message": f"No research task found with ID: {task_id}",
+            "suggestion": "Verify task_id from start_deep_research response"
+        }
+
+    # Check if already completed
+    if task.status == TaskStatus.COMPLETED:
+        return {
+            "success": True,
+            "status": "already_completed",
+            "task_id": task_id,
+            "message": "Research already completed. Use get_research_results to retrieve.",
+            "suggestion": f"get_research_results(task_id='{task_id}')"
+        }
+
+    # Need interaction_id to resume
+    if not task.interaction_id:
+        return {
+            "success": False,
+            "error": "NO_INTERACTION_ID",
+            "task_id": task_id,
+            "message": "Task has no Gemini interaction ID. Cannot resume.",
+            "suggestion": "Start a new research task with start_deep_research"
+        }
+
+    logger.info(f"Attempting to resume research task {task_id}")
+
+    try:
+        # Use engine's resume capability
+        resume_result = await deep_research_engine.resume_research(
+            task_id=task_id,
+            interaction_id=task.interaction_id
+        )
+
+        resume_status = resume_result.get("status", "unknown")
+
+        if resume_status == "completed":
+            # Research finished - save results
+            raw_result = resume_result.get("result", {})
+            research_result = deep_research_engine.create_research_result(task_id, raw_result)
+            state_manager.save_result(task_id, research_result)
+
+            # Update task to completed
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.COMPLETED,
+                "progress": 100,
+                "current_action": "Research complete (resumed)",
+                "completed_at": datetime.utcnow()
+            })
+
+            return {
+                "success": True,
+                "status": "completed",
+                "task_id": task_id,
+                "message": "Research completed successfully after resume.",
+                "suggestion": f"Use get_research_results(task_id='{task_id}') to retrieve full report"
+            }
+
+        elif resume_status in ["failed_with_partial", "resume_failed_with_partial"]:
+            # Failed but we have partial results
+            raw_result = resume_result.get("result", {})
+
+            # Check if partial report has content
+            partial_report = raw_result.get("report", "")
+            if partial_report:
+                # Save partial results
+                research_result = deep_research_engine.create_research_result(task_id, raw_result)
+                state_manager.save_result(task_id, research_result)
+
+                # Update task with partial completion
+                state_manager.update_task(task_id, {
+                    "status": TaskStatus.COMPLETED,  # Mark as completed so results are retrievable
+                    "progress": 100,
+                    "current_action": "Partial results saved",
+                    "error_message": raw_result.get("metadata", {}).get("error", "Research incomplete"),
+                    "completed_at": datetime.utcnow()
+                })
+
+                return {
+                    "success": True,
+                    "status": "partial_results_saved",
+                    "task_id": task_id,
+                    "partial_report_preview": partial_report[:500] + "..." if len(partial_report) > 500 else partial_report,
+                    "message": "Research failed but partial results were recovered and saved.",
+                    "suggestion": f"Use get_research_results(task_id='{task_id}') to retrieve partial report"
+                }
+            else:
+                return {
+                    "success": False,
+                    "status": "failed_no_results",
+                    "task_id": task_id,
+                    "error": resume_result.get("error", "Unknown failure"),
+                    "message": "Research failed and no partial results available."
+                }
+
+        elif resume_status == "failed":
+            return {
+                "success": False,
+                "status": "failed",
+                "task_id": task_id,
+                "error": resume_result.get("error", "Unknown failure"),
+                "message": "Research failed. Consider starting a new research task."
+            }
+
+        else:
+            return {
+                "success": False,
+                "status": resume_status,
+                "task_id": task_id,
+                "message": f"Unexpected resume status: {resume_status}"
+            }
+
+    except Exception as e:
+        logger.error(f"Resume failed for {task_id}: {e}")
+
+        # Check if we have any cached intermediate results
+        cached = deep_research_engine.get_intermediate_results(task_id)
+        if cached:
+            partial_report = "\n\n".join(cached)
+            return {
+                "success": False,
+                "status": "resume_failed_with_cache",
+                "task_id": task_id,
+                "error": str(e),
+                "cached_chunks": len(cached),
+                "partial_report_preview": partial_report[:500] + "..." if len(partial_report) > 500 else partial_report,
+                "message": f"Resume failed but {len(cached)} cached chunks available.",
+                "suggestion": "You may save these cached results manually or start new research."
+            }
+
+        return {
+            "success": False,
+            "error": "RESUME_FAILED",
+            "task_id": task_id,
+            "message": f"Failed to resume research: {str(e)}",
+            "suggestion": "Consider starting a new research task"
+        }
 
 
 @mcp.tool()
@@ -1022,7 +1274,7 @@ def save_research_to_markdown(
 # Original Gemini Tools
 # ============================================================================
 
-def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-2.0-flash-001") -> str:
+def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-3-flash-preview") -> str:
     """Call Gemini using the new unified SDK and return response"""
     if not GEMINI_AVAILABLE or not client:
         return f"Gemini not available: {GEMINI_ERROR}"
@@ -1251,7 +1503,7 @@ def gemini_research(topic: str) -> str:
         )
         
         response = client.models.generate_content(
-            model="gemini-2.0-flash-001",  # Model that supports grounding
+            model="gemini-3-flash-preview",  # Model that supports grounding
             contents=topic,
             config=types.GenerateContentConfig(
                 tools=[grounding_tool],
@@ -1444,9 +1696,9 @@ def interpret_image(
         contents.append(prompt)
 
         # Send all images to Gemini in one request
-        response = client.models.generate_content(
-            model="gemini-2.0-flash-001",
-            contents=contents,
+            response = client.models.generate_content(
+                model="gemini-3-flash-preview",
+                contents=contents,
             config=types.GenerateContentConfig(
                 temperature=temperature,
                 max_output_tokens=8192,
@@ -2029,7 +2281,7 @@ def is_youtube_url(url: str) -> bool:
 def watch_video(
     input_path: Optional[str] = None,
     prompt: str = "",
-    model: str = "gemini-2.0-flash-001",
+    model: str = "gemini-3-flash-preview",
     file_uri: Optional[str] = None,
     auto_analyze: bool = True,
     max_wait_seconds: int = 300,
@@ -2097,7 +2349,7 @@ def watch_video(
                - "What code examples are shown in this tutorial?"
                - "List all the commands demonstrated in this video"
 
-        model: Gemini model to use (default: gemini-2.0-flash-001).
+        model: Gemini model to use (default: gemini-3-flash-preview).
 
         file_uri: Use an already-uploaded file instead of uploading a new one.
                  Format: "files/abc123xyz"
@@ -2278,5 +2530,17 @@ def watch_video(
     except Exception as e:
         return f"🤖 GEMINI RESPONSE:\n\nError analyzing video: {str(e)}"
 
+async def main():
+    """Main entry point with startup recovery."""
+    import asyncio
+
+    # Run startup recovery (resume incomplete tasks)
+    await on_server_startup()
+
+    # Start the MCP server
+    await mcp.run_stdio_async()
+
+
 if __name__ == "__main__":
-    mcp.run()
+    import asyncio
+    asyncio.run(main())

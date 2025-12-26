@@ -8,11 +8,32 @@ It acts as a bridge, allowing a compatible AI assistant to offload specific task
 ## Features
 
 - **General MCP Interface**: Implements the MCP protocol for easy integration with any compatible client.
-- **Gemini Integration**: Leverages the power of Google's Gemini 2.0 Flash model.
+- **Gemini Integration**: Leverages the power of Google's Gemini 3 Flash model (gemini-3-flash-preview).
 - **Multi-Image Analysis**: Compare and analyze up to 3,600 images in a single request.
 - **Extensible Toolset**: Easily add new tools that call upon Gemini's capabilities.
 - **Multimodal Support**: Process text, images, and videos through Gemini's multimodal capabilities.
 - **Lightweight and Fast**: Built with Python, easy to run and deploy.
+
+## Models Used
+
+This MCP server uses the latest Gemini models for optimal performance:
+
+| Tool Type | Model | Notes |
+|-----------|-------|-------|
+| **Most Tools** | `gemini-3-flash-preview` | Latest Gemini 3 Flash (Pro-level performance at Flash speeds) |
+| ask_gemini | `gemini-3-flash-preview` | General Q&A and collaboration |
+| gemini_code_review | `gemini-3-flash-preview` | Code analysis and review |
+| gemini_brainstorm | `gemini-3-flash-preview` | Creative ideation |
+| gemini_debug | `gemini-3-flash-preview` | Error analysis and debugging |
+| gemini_research | `gemini-3-flash-preview` | Google Search grounded research |
+| watch_video | `gemini-3-flash-preview` | Video analysis (YouTube & local files) |
+| interpret_image | `gemini-3-flash-preview` | Image understanding and analysis |
+| **Deep Research** | `deep-research-pro-preview-12-2025` | Specialized research model for complex queries |
+
+**Model Features:**
+- 🎯 **Gemini 3 Flash**: Pro-level reasoning at Flash speeds, 1M token context window
+- 🔬 **Deep Research Pro**: Multi-hop reasoning, automatic query refinement, source synthesis
+- 💰 **Pricing**: Gemini 3 Flash - $0.50/1M input tokens, $3/1M output tokens
 
 ## Setup and Installation
 
@@ -121,11 +142,31 @@ The server follows the [Multi-tool Co-pilot Protocol (MCP)](https://github.com/s
 - **`tools/list`**: The client requests a list of available tools.
 - **`tools/call`**: The client asks the server to run a specific tool with given arguments.
 
-The server currently exposes the following tools to the client:
+The server currently exposes **19 tools** to the client:
+
+**Core Gemini Tools (6):**
 - `ask_gemini`: Ask Gemini a direct question.
 - `gemini_code_review`: Get a code review from Gemini.
 - `gemini_brainstorm`: Brainstorm ideas with Gemini.
 - `gemini_debug`: Analyze error messages and suggest fixes.
 - `gemini_research`: Get research with Google Search grounding.
 - `watch_video`: Analyze YouTube videos or local video files.
-- `interpret_image`: Analyze one or multiple images (supports up to 3,600 images per request for comparison and batch analysis).
+
+**Deep Research Tools (7):**
+- `start_deep_research`: Start complex research with multi-hop reasoning (5-60 min duration).
+- `check_research_status`: Monitor async research task progress.
+- `get_research_results`: Retrieve completed research reports (zero-cost retrieval from SQLite).
+- `cancel_research`: Stop running research tasks with optional partial saves.
+- `resume_research`: Resume failed or interrupted research tasks.
+- `estimate_research_cost`: Pre-execution cost and duration estimates.
+- `save_research_to_markdown`: Export research to formatted Markdown files.
+
+**File Management Tools (5):**
+- `interpret_image`: Analyze one or multiple images (supports up to 3,600 images per request).
+- `check_file_status`: Check processing status of uploaded files.
+- `list_uploaded_files`: Browse all files in Gemini cloud storage (48-hour retention).
+- `get_last_uploaded_video`: Quick access to most recent video upload.
+- `delete_uploaded_file`: Delete files from Gemini cloud storage.
+
+**Utility (1):**
+- `server_info`: Check server status and connectivity.

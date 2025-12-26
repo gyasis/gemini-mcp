@@ -89,6 +89,13 @@ class StateManager:
 
     DB_PATH = Path("deep_research.db")
 
+    # SECURITY: Whitelist of allowed columns for update_task()
+    ALLOWED_UPDATE_COLUMNS = {
+        'interaction_id', 'status', 'progress', 'current_action',
+        'enable_notifications', 'max_wait_hours', 'tokens_input',
+        'tokens_output', 'cost_usd', 'error_message', 'completed_at'
+    }
+
     def __init__(self, db_path: Optional[Path] = None):
         """Initialize the state manager.
 
@@ -99,9 +106,18 @@ class StateManager:
         self._init_db()
 
     def _get_connection(self) -> sqlite3.Connection:
-        """Get a new database connection."""
+        """Get a new database connection with foreign keys enabled."""
         conn = sqlite3.connect(self.db_path, check_same_thread=False)
         conn.row_factory = sqlite3.Row
+
+        # CRITICAL: Enable foreign key enforcement (disabled by default in SQLite)
+        conn.execute("PRAGMA foreign_keys=ON")
+
+        # Verify WAL mode succeeded (optional but recommended)
+        result = conn.execute("PRAGMA journal_mode").fetchone()
+        if result and result[0] != 'wal':
+            logger.warning(f"WAL mode not active, using: {result[0]}")
+
         return conn
 
     def _init_db(self):
@@ -138,8 +154,20 @@ class StateManager:
                     sources_json TEXT,
                     metadata_json TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (task_id) REFERENCES research_tasks(task_id)
+                    FOREIGN KEY (task_id) REFERENCES research_tasks(task_id) ON DELETE CASCADE
                 );
+
+                CREATE TABLE IF NOT EXISTS progress_snapshots (
+                    task_id TEXT NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    progress INTEGER NOT NULL,
+                    action TEXT DEFAULT '',
+                    api_status TEXT DEFAULT '',
+                    PRIMARY KEY (task_id, timestamp),
+                    FOREIGN KEY (task_id) REFERENCES research_tasks(task_id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_snapshots_task ON progress_snapshots(task_id);
             ''')
             conn.commit()
         finally:
@@ -214,11 +242,27 @@ class StateManager:
 
     @sqlite_retry()
     def update_task(self, task_id: str, updates: Dict[str, Any]) -> None:
-        """Update specific fields of a task."""
+        """Update specific fields of a task.
+
+        Args:
+            task_id: Task ID to update
+            updates: Dict of column_name -> value pairs
+
+        Raises:
+            ValueError: If any column name is not whitelisted
+        """
         if not updates:
             return
 
-        # Build dynamic update query
+        # SECURITY: Validate all column names against whitelist
+        invalid_columns = set(updates.keys()) - self.ALLOWED_UPDATE_COLUMNS
+        if invalid_columns:
+            raise ValueError(
+                f"Invalid column names in update: {invalid_columns}. "
+                f"Allowed columns: {self.ALLOWED_UPDATE_COLUMNS}"
+            )
+
+        # Build dynamic update query (now safe - all keys validated)
         set_clauses = []
         values = []
         for key, value in updates.items():
@@ -324,8 +368,13 @@ class StateManager:
         """Delete a task and its results."""
         conn = self._get_connection()
         try:
-            # Delete results first (foreign key)
+            # Delete progress snapshots first
+            conn.execute("DELETE FROM progress_snapshots WHERE task_id = ?", (task_id,))
+
+            # Delete results (foreign key constraint will be enforced now)
             conn.execute("DELETE FROM research_results WHERE task_id = ?", (task_id,))
+
+            # Delete task
             cursor = conn.execute("DELETE FROM research_tasks WHERE task_id = ?", (task_id,))
             conn.commit()
             return cursor.rowcount > 0
@@ -362,5 +411,93 @@ class StateManager:
                     completed_at=datetime.fromisoformat(row['completed_at']) if row['completed_at'] else None
                 ))
             return tasks
+        finally:
+            conn.close()
+
+    # =========================================================================
+    # Progress Snapshot Persistence (for hanging detection across restarts)
+    # =========================================================================
+
+    @sqlite_retry()
+    def save_progress_snapshot(
+        self,
+        task_id: str,
+        progress: int,
+        action: str = "",
+        api_status: str = "",
+        timestamp: Optional[datetime] = None
+    ) -> None:
+        """Save a progress snapshot for hanging detection persistence.
+
+        Args:
+            task_id: The task ID
+            progress: Current progress percentage (0-100)
+            action: Current action description
+            api_status: Actual API status (in_progress, completed, failed)
+            timestamp: Snapshot timestamp (defaults to now)
+        """
+        ts = timestamp or datetime.utcnow()
+        conn = self._get_connection()
+        try:
+            conn.execute('''
+                INSERT OR REPLACE INTO progress_snapshots
+                (task_id, timestamp, progress, action, api_status)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (task_id, ts.isoformat(), progress, action, api_status))
+            conn.commit()
+        finally:
+            conn.close()
+
+    @sqlite_retry()
+    def get_progress_snapshots(self, task_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """Get progress snapshots for a task (most recent first).
+
+        Args:
+            task_id: The task ID
+            limit: Maximum number of snapshots to return
+
+        Returns:
+            List of snapshot dicts with timestamp, progress, action, api_status
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute('''
+                SELECT timestamp, progress, action, api_status
+                FROM progress_snapshots
+                WHERE task_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (task_id, limit))
+            snapshots = []
+            for row in cursor.fetchall():
+                snapshots.append({
+                    "timestamp": row['timestamp'],
+                    "progress": row['progress'],
+                    "action": row['action'] or "",
+                    "api_status": row['api_status'] or ""
+                })
+            # Reverse to get oldest-first order (for hanging detector)
+            return list(reversed(snapshots))
+        finally:
+            conn.close()
+
+    @sqlite_retry()
+    def clear_progress_snapshots(self, task_id: str) -> int:
+        """Clear progress snapshots for a completed/cancelled task.
+
+        Args:
+            task_id: The task ID
+
+        Returns:
+            Number of snapshots deleted
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "DELETE FROM progress_snapshots WHERE task_id = ?",
+                (task_id,)
+            )
+            conn.commit()
+            return cursor.rowcount
         finally:
             conn.close()
