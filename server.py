@@ -1696,9 +1696,9 @@ def interpret_image(
         contents.append(prompt)
 
         # Send all images to Gemini in one request
-            response = client.models.generate_content(
-                model="gemini-3-flash-preview",
-                contents=contents,
+        response = client.models.generate_content(
+            model="gemini-3-flash-preview",
+            contents=contents,
             config=types.GenerateContentConfig(
                 temperature=temperature,
                 max_output_tokens=8192,
@@ -2412,12 +2412,16 @@ def watch_video(
             if not prompt:
                 return "🤖 GEMINI RESPONSE:\n\nError: 'prompt' parameter is required when analyzing a video."
 
-            # For YouTube videos, include URL in the prompt
-            full_prompt = f"{prompt}\n\nAnalyze this YouTube video: {input_path}"
-
+            # For YouTube videos, use Part.from_uri to pass the URL as video content
             response = client.models.generate_content(
                 model=model,
-                contents=full_prompt,
+                contents=[
+                    types.Part.from_uri(
+                        file_uri=input_path,
+                        mime_type="video/mp4"
+                    ),
+                    prompt
+                ],
                 config=types.GenerateContentConfig(
                     temperature=0.5,
                     max_output_tokens=8192,
