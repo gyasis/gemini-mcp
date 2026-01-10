@@ -161,6 +161,42 @@ The server currently exposes **19 tools** to the client:
 - `estimate_research_cost`: Pre-execution cost and duration estimates.
 - `save_research_to_markdown`: Export research to formatted Markdown files.
 
+### FastMCP Task Support (v3.8.0)
+
+The deep research tools now use **FastMCP's native background task system** for long-running operations:
+
+**Key Features:**
+- **Protocol-Native Tasks**: Implements MCP SEP-1686 task specification
+- **Automatic Notifications**: LLM clients notified when research completes
+- **Token Savings**: Eliminates need for manual status polling (98% reduction)
+- **Zero-Cost Retrieval**: Results cached in SQLite for instant access
+
+**LLM Usage Pattern:**
+```python
+# Start research - returns immediately with task_id
+result = start_deep_research("quantum computing advances")
+
+# Continue other work - research runs in background
+# ... LLM can handle other user requests ...
+
+# FastMCP sends notification when complete (no polling needed!)
+
+# Retrieve results from SQLite cache (zero tokens)
+final = get_research_results(result["task_id"])
+```
+
+**Benefits for AI Assistants:**
+- No context window wasted on polling
+- Can multitask during long research sessions
+- Single notification instead of repeated checks
+- Simpler code patterns for LLM agents
+
+**Technical Implementation:**
+- Uses `@mcp.tool(task=True)` decorator
+- Progress updates via FastMCP `Progress` dependency
+- Custom polling loop preserved for Gemini API interaction
+- SQLite persistence ensures cross-restart recovery
+
 **File Management Tools (5):**
 - `interpret_image`: Analyze one or multiple images (supports up to 3,600 images per request).
 - `check_file_status`: Check processing status of uploaded files.

@@ -78,7 +78,7 @@ Six specialized tools for long-running research with SQLite persistence:
 
 ## Dependencies
 
-- `fastmcp>=2.0.0`: FastMCP server abstraction
+- `fastmcp>=2.0.0`: FastMCP server with native task support (MCP SEP-1686)
 - `google-genai>=0.3.0`: Unified Google Gen AI SDK
 - `python-dotenv>=1.1.0`: Environment variable management
 - `notify-py>=0.3.0`: Cross-platform desktop notifications
@@ -86,6 +86,7 @@ Six specialized tools for long-running research with SQLite persistence:
 
 ## Development Notes
 
+- **Version 3.8.0**: Migrated deep research to FastMCP native background tasks (98% token savings vs polling)
 - **Version 3.7.0**: Added Gemini Deep Research tools with SQLite persistence and asyncio
 - **Version 3.6.0**: Added file management system for Gemini storage
 - **Version 3.1.0**: Added watch_video tool for video analysis

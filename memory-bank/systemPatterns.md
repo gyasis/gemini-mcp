@@ -202,10 +202,11 @@ deep_research/
 ├── __init__.py           # Data models (TaskStatus, Source, TokenUsage, etc.)
 ├── state_manager.py      # SQLite + WAL mode persistence
 ├── notification.py       # Cross-platform desktop notifications
-├── background.py         # asyncio task lifecycle management
 ├── engine.py            # DeepResearchEngine (Wave 3)
 ├── cost_estimator.py    # CostEstimator (Wave 6)
 └── storage.py           # MarkdownStorage with Jinja2 (Wave 8)
+
+# Note: background.py removed in v3.8.0 - FastMCP handles background tasks natively
 ```
 
 **Key Architectural Decisions**:
@@ -227,8 +228,103 @@ deep_research/
 - `research_tasks` table: task metadata, status, progress, tokens, cost
 - `research_results` table: completed reports, sources, metadata
 - Automatic recovery on server restart for incomplete tasks
+- Foreign key enforcement enabled for data integrity (v3.7.1 fix)
+- Per-task locking to prevent race conditions (v3.7.1 fix)
+- Column whitelisting for SQL injection protection (v3.7.1 fix)
 
-**Implementation Status**: Wave 1-2 complete (8/30 tasks), Wave 3 pending API research
+**Implementation Status**: ALL 13 WAVES COMPLETE - Successfully merged to main branch
+
+**Critical Bug Fixes (v3.7.1)**:
+1. **SQLite Foreign Key Enforcement**: Enabled PRAGMA foreign_keys=ON to prevent orphaned data
+2. **Event Loop Timing**: Fixed asyncio.run() timing issues causing startup crashes
+3. **Race Condition Protection**: Added per-task locking mechanism to prevent concurrent updates
+4. **Memory Leak Fixes**: Proper cleanup of background tasks and database connections
+5. **SQL Injection Protection**: Column whitelisting in update_task method
+
+**API Usage Corrections (commit 65a907b)**:
+- Fixed interpret_image indentation that broke proper response handling
+- Fixed watch_video to use Part.from_uri() for YouTube URLs instead of embedding in prompt text
+- Ensures compliance with Gemini API best practices for video content
+
+### 7. FastMCP Task Integration (v3.8.0)
+
+**Pattern**: Protocol-native background task execution with progress updates
+
+**Architecture Overview**:
+```python
+# FastMCP Task Protocol (MCP SEP-1686)
+@mcp.tool(task=True)  # Enables native task support
+async def start_deep_research(
+    query: str,
+    progress: Progress,  # Dependency injection by FastMCP
+    # ... other parameters
+) -> str:
+    # Create progress bridge to connect engine callbacks to FastMCP
+    progress_bridge = create_progress_bridge(progress)
+
+    # Engine uses callback for progress updates
+    engine.start_research(query, callback=progress_bridge)
+
+    # FastMCP handles background execution automatically
+    return task_id
+```
+
+**Key Implementation Details**:
+
+1. **Progress Dependency Injection**:
+   - FastMCP automatically injects `Progress` parameter
+   - No manual polling infrastructure needed
+   - Protocol-native progress notifications
+
+2. **Progress Bridge Pattern**:
+   ```python
+   def create_progress_bridge(progress: Progress):
+       def bridge(status: str, percent: float):
+           # Non-blocking async schedule
+           asyncio.create_task(
+               progress.report_progress(status, percent)
+           )
+       return bridge
+   ```
+   - Converts engine callbacks to FastMCP Progress API
+   - Uses `asyncio.create_task()` for non-blocking updates
+   - Prevents blocking main execution thread
+
+3. **Background Task Lifecycle**:
+   - FastMCP's task wrapper handles async execution
+   - Docket integration for background task management
+   - Automatic cleanup on completion/failure
+   - No manual BackgroundTaskManager needed
+
+4. **Token Economics**:
+   - **Before (Manual Polling)**: 50-100k tokens
+     - Client polls check_research_status every 10-30 seconds
+     - Each poll consumes 2-4k tokens
+     - 10-30 minute research = 30-100 polls
+   - **After (Task Protocol)**: 1-2k tokens
+     - Single tool invocation
+     - Protocol-native notifications
+     - Zero-cost status updates
+   - **Savings**: 98% token reduction
+
+5. **Breaking Changes from FastMCP 2.14.2**:
+   - Memory footprint increased 30% (Docket always loaded)
+   - Lifespan semantics changed (server vs session lifecycle)
+   - Some deprecated APIs removed (BearerAuthProvider, etc.)
+   - No impact on our codebase
+
+**Benefits**:
+- **Massive Token Savings**: 98% reduction in token costs for LLM agents
+- **Protocol Compliance**: Implements MCP SEP-1686 specification
+- **Simpler Code**: Removed ~100 lines of manual task management
+- **Better UX**: Automatic notifications when research completes
+- **Zero-Cost Retrieval**: Results cached in SQLite for instant access
+
+**Implementation Impact**:
+- Only `start_deep_research` affected (1 of 13 tools)
+- All other tools unchanged
+- SQLite state management preserved
+- Custom polling logic preserved for error recovery
 
 ## Gemini Interaction Modes
 

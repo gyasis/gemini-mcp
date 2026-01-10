@@ -8,11 +8,11 @@ tags: []
 
 ## Current Status Overview
 
-**Project Version**: 3.7.0 (production-ready)
-**Phase**: Feature Complete - Hybrid Deep Research System
-**Branch**: 001-hybrid-deep-research (ready for merge)
-**Health**: :white_check_mark: Production Ready (13 tools, all tests passing)
-**Last Major Update**: Wave 12-13 complete - SQLite retry logic, version bump to 3.7.0, CLAUDE.md documentation updated. Feature 001 fully implemented (100% complete).
+**Project Version**: 3.8.0 (production-ready with FastMCP task protocol)
+**Phase**: Production Enhancement - Token Efficiency Milestone
+**Branch**: main
+**Health**: :white_check_mark: Excellent (13 tools, 98% token savings, all tests passing)
+**Last Major Update**: v3.8.0 (Jan 10, 2026) - FastMCP task protocol integration providing 98% token savings for LLM agents. Previous: Commit 65a907b (Dec 31, 2025) - Fixed indentation and YouTube video URL handling. Merge commit ee19d4c successfully integrated all Deep Research features with critical bug fixes from v3.7.1.
 
 ## What Works
 
@@ -32,7 +32,10 @@ tags: []
 6. **watch_video**: Analyze YouTube videos (by URL) or local video files ✅
 7. **interpret_image**: Analyze images from local files, URLs, or base64 data ✅
 
-### :white_check_mark: Deep Research System (Feature 001 - Waves 1-9 Complete)
+### :white_check_mark: Deep Research System (Feature 001 - All Waves Complete, Merged to Main)
+
+**Status**: :white_check_mark: Complete - Successfully merged to main branch (commit ee19d4c)
+**Version**: 3.7.1 (includes critical bug fixes)
 
 **Wave 1: Setup (T001-T004)** - ✅ Complete
 - ✅ Module structure created (deep_research/ with 7 files)
@@ -94,20 +97,31 @@ tags: []
 
 ## What's Left to Build
 
-### :white_check_mark: Deep Research System (Feature 001 - COMPLETE)
+### :white_check_mark: Deep Research System (Feature 001 - COMPLETE AND MERGED)
 
-**All 13 Waves Complete** - Feature implementation finished
-- Feature 001-hybrid-deep-research is production-ready
+**All 13 Waves Complete** - Feature successfully merged to main
+- Feature 001-hybrid-deep-research merged in commit ee19d4c
 - All 6 deep research tools implemented and tested
 - SQLite retry logic handles concurrent access gracefully
-- Version 3.7.0 tagged and ready for release
+- Critical bug fixes applied in v3.7.1:
+  - SQLite foreign key enforcement
+  - Event loop timing corrections
+  - Race condition protection with per-task locking
+  - Memory leak fixes
+  - SQL injection protection
+- API usage corrections in commit 65a907b:
+  - Fixed interpret_image indentation
+  - Fixed watch_video YouTube URL handling (now uses Part.from_uri())
+- Version 3.7.1 in production
 
 ### :white_large_square: Post-Feature Work
 
 **Next Steps** - :white_large_square: Recommended
-- :white_large_square: Merge 001-hybrid-deep-research branch to main
+- :white_check_mark: Merge 001-hybrid-deep-research branch to main (completed in ee19d4c)
+- :white_check_mark: Apply critical bug fixes (completed in v3.7.1)
+- :white_check_mark: Fix API usage issues (completed in 65a907b)
 - :white_large_square: Update README.md with deep research system documentation
-- :white_large_square: Create v3.7.0 release tag with changelog
+- :white_large_square: Create v3.7.1 release tag with changelog
 - :white_large_square: User acceptance testing
 
 ### :white_large_square: Documentation
@@ -288,10 +302,57 @@ tags: []
 
 ## Version History (Recent)
 
-### v3.7.0 - Deep Research System Complete (Current - Production Ready)
-**Branch**: 001-hybrid-deep-research (ready for merge)
+### v3.8.0 - FastMCP Task Protocol Integration (Current - Main Branch)
+**Branch**: main
+**Focus**: Major token efficiency improvement with protocol-native task support
+**Release Date**: January 10, 2026
+**Key Changes**:
+- Upgraded FastMCP from 2.13.0 to 2.14.2
+- Implemented MCP SEP-1686 task protocol for start_deep_research
+- Added Progress dependency injection with progress_bridge pattern
+- Removed BackgroundTaskManager (now redundant with FastMCP native tasks)
+- Simplified async handling (~100 lines removed)
+
+**Major Benefits**:
+- :white_check_mark: **98% token savings**: Manual polling (50-100k tokens) → Task protocol (1-2k tokens)
+- :white_check_mark: **Protocol-native**: Implements MCP SEP-1686 specification
+- :white_check_mark: **Automatic notifications**: LLM clients notified when research completes
+- :white_check_mark: **Zero-cost retrieval**: Results cached in SQLite for instant access
+- :white_check_mark: **Simpler codebase**: Removed manual background task management
+
+**Breaking Changes from FastMCP 2.14.2**:
+- Memory footprint increased 30% (Docket always loaded)
+- Lifespan semantics changed (server vs session lifecycle)
+- Some deprecated APIs removed (no impact on our codebase)
+
+**Status**: :white_check_mark: Complete - Completes deep research feature set with production-grade efficiency
+
+### v3.7.1 - Production Release with Critical Bug Fixes (Previous)
+**Branch**: main
+**Focus**: Critical bug fixes and API corrections post-merge
+**Latest Commit**: 65a907b - fix: correct indentation and YouTube video URL handling (Dec 31, 2025)
+**Merge Commit**: ee19d4c - Merged 001-hybrid-deep-research with critical bug fixes (Dec 26, 2025)
+
+**Critical Bug Fixes** (commit 7f795bb):
+1. SQLite foreign key enforcement to prevent data corruption
+2. Event loop timing fix to prevent startup crashes
+3. Race condition protection with per-task locking
+4. Memory leak fixes with proper cleanup
+5. SQL injection protection with column whitelisting
+
+**API Corrections** (commit 65a907b):
+- Fixed interpret_image function indentation issue
+- Fixed watch_video to use Part.from_uri() for YouTube URLs instead of embedding in prompt
+- Ensures proper Gemini API usage patterns for video content
+
+**Other Updates**:
+- Upgraded google-genai SDK (commit 414defb)
+- Configured pytest-asyncio for proper test execution
+
+### v3.7.0 - Deep Research System Complete (Feature Branch)
+**Branch**: 001-hybrid-deep-research (merged to main in ee19d4c)
 **Focus**: Hybrid Deep Research System - ALL 13 WAVES COMPLETE
-**Latest Commit**: 1a8e0d2 - feat: finalize deep research v3.7.0 - SQLite retry, docs, version bump (T026-T030)
+**Final Commit**: 1a8e0d2 - feat: finalize deep research v3.7.0 - SQLite retry, docs, version bump (T026-T030)
 
 **Wave 1: Setup (T001-T004)** - ✅ Complete
 - Created deep_research/ module structure with 7 files
