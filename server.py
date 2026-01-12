@@ -826,6 +826,121 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
 
 
 @mcp.tool()
+def list_research_tasks(
+    status_filter: Optional[str] = None,
+    limit: int = 20
+) -> Dict[str, Any]:
+    """List research tasks from SQLite - recover task_ids after tool timeouts.
+
+    **Key Use Case**: When start_deep_research times out, the task_id is STILL
+    in SQLite. Call this to recover it, then use check_research_status or
+    get_research_results with the recovered task_id.
+
+    **Zero Token Cost** - Reads from local SQLite, no Gemini API calls.
+
+    Args:
+        status_filter: Filter by status: "running", "pending", "completed",
+                      "failed", "cancelled", or None for all tasks
+        limit: Max tasks to return (default: 20, max: 100)
+
+    Returns:
+        Dict with tasks list (task_id, query, status, progress, timestamps)
+    """
+    # Check availability
+    if not state_manager:
+        return {
+            "success": False,
+            "error": "SQLITE_ERROR",
+            "message": "State manager not available",
+            "suggestion": "Check server initialization"
+        }
+
+    # Validate limit
+    limit = max(1, min(limit, 100))
+
+    # Validate status_filter
+    valid_statuses = {"running", "pending", "completed", "failed", "cancelled", None}
+    if status_filter and status_filter.lower() not in {s for s in valid_statuses if s}:
+        return {
+            "success": False,
+            "error": "INVALID_FILTER",
+            "message": f"Invalid status_filter: {status_filter}",
+            "suggestion": f"Use one of: running, pending, completed, failed, cancelled"
+        }
+
+    try:
+        # Get all tasks from SQLite
+        all_tasks = state_manager.get_all_tasks(limit=limit * 2)  # Get extra for filtering
+
+        # Filter by status if provided
+        if status_filter:
+            status_lower = status_filter.lower()
+            filtered_tasks = [
+                t for t in all_tasks
+                if t.status.name.lower() == status_lower
+            ][:limit]
+        else:
+            filtered_tasks = all_tasks[:limit]
+
+        # Format response
+        task_list = []
+        for task in filtered_tasks:
+            elapsed_seconds = 0
+            if task.created_at:
+                elapsed_seconds = (datetime.utcnow() - task.created_at).total_seconds()
+
+            task_info = {
+                "task_id": task.task_id,
+                "query": task.query[:100] + "..." if len(task.query) > 100 else task.query,
+                "status": task.status.name.lower(),
+                "progress": task.progress,
+                "current_action": task.current_action,
+                "elapsed_minutes": round(elapsed_seconds / 60, 2),
+                "created_at": task.created_at.isoformat() if task.created_at else None,
+                "model": task.model
+            }
+
+            # Add completed_at if available
+            if task.completed_at:
+                task_info["completed_at"] = task.completed_at.isoformat()
+
+            # Add error_message if failed
+            if task.error_message:
+                task_info["error_message"] = task.error_message[:200]
+
+            task_list.append(task_info)
+
+        # Count by status for summary
+        status_counts = {}
+        for task in all_tasks:
+            status_name = task.status.name.lower()
+            status_counts[status_name] = status_counts.get(status_name, 0) + 1
+
+        return {
+            "success": True,
+            "tasks": task_list,
+            "count": len(task_list),
+            "total_in_db": len(all_tasks),
+            "status_counts": status_counts,
+            "filter_applied": status_filter,
+            "message": (
+                f"Found {len(task_list)} task(s)"
+                + (f" with status '{status_filter}'" if status_filter else "")
+                + ". Use task_id with check_research_status or get_research_results."
+            )
+        }
+
+    except Exception as e:
+        logger.error(f"Error listing research tasks: {e}")
+        return {
+            "success": False,
+            "error": "DATABASE_ERROR",
+            "message": f"Failed to list tasks: {str(e)}",
+            "suggestion": "Check SQLite database connectivity"
+        }
+
+
+@mcp.tool()
 def cancel_research(
     task_id: str,
     save_partial: bool = True
