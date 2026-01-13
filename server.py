@@ -350,6 +350,11 @@ async def start_deep_research(
     state_manager.save_task(task)
     logger.info(f"Created research task {task_id[:8]}: {query[:50]}...")
 
+    # IMMEDIATELY emit task_id via progress so client has it before any API calls
+    # This ensures task_id is visible even if the tool call times out later
+    await progress.set_message(f"TASK_ID:{task_id}")
+    await progress.set_total(100)
+
     # Update status to RUNNING
     state_manager.update_task(task_id, {"status": TaskStatus.RUNNING})
 
