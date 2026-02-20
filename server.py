@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Gemini MCP Server v3.7.1
+Gemini MCP Server v3.9.0
 Enables a primary AI assistant to collaborate with Google's Gemini AI using the modern unified Google Gen AI SDK.
 
 Features Gemini Deep Research tools with SQLite persistence and asyncio background tasks:
@@ -23,7 +23,6 @@ from pathlib import Path
 from datetime import datetime
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.dependencies import Progress
 import mimetypes
 
 # Configure logging for deep research
@@ -36,7 +35,7 @@ env_path = Path(__file__).parent / '.env'
 load_dotenv(dotenv_path=env_path)
 
 # Server version
-__version__ = "3.7.1"
+__version__ = "3.9.0"
 
 # Initialize MCP server
 mcp = FastMCP("Gemini MCP Server", version=__version__)
@@ -107,6 +106,14 @@ except Exception as e:
     DEEP_RESEARCH_AVAILABLE = False
     DEEP_RESEARCH_ERROR = str(e)
     logger.error(f"Failed to initialize deep research: {e}")
+
+
+# ============================================================================
+# Background Task Registry (for cancellation support)
+# ============================================================================
+
+# Maps task_id -> asyncio.Task for background polling coroutines
+_background_tasks: Dict[str, asyncio.Task] = {}
 
 
 # ============================================================================
@@ -189,9 +196,10 @@ async def _continue_research(task_id: str, interaction_id: str):
 async def on_server_startup():
     """Resume incomplete tasks from SQLite on server startup.
 
-    NOTE: Startup recovery is now handled by FastMCP's task system.
-    This function is preserved for manual task cleanup but background task
-    spawning has been removed in favor of FastMCP's built-in task management.
+    For tasks WITH an interaction_id: re-launches background polling to check
+    if Gemini completed while the server was down, and saves results if so.
+
+    For tasks WITHOUT an interaction_id: marks as failed (unrecoverable).
     """
     if not state_manager:
         logger.debug("Deep research not available, skipping startup recovery")
@@ -203,21 +211,42 @@ async def on_server_startup():
             logger.debug("No incomplete research tasks to resume")
             return
 
-        logger.info(f"Found {len(incomplete_tasks)} incomplete research tasks")
-        logger.info("FastMCP task system will handle automatic task resumption")
+        resumable = [(tid, iid) for tid, iid in incomplete_tasks if iid]
+        unresumable = [(tid, iid) for tid, iid in incomplete_tasks if not iid]
+
+        if unresumable:
+            logger.info(f"{len(unresumable)} task(s) marked FAILED (no interaction_id)")
+        if resumable:
+            logger.info(f"{len(resumable)} task(s) resumable — launching background recovery")
 
         # Mark tasks without interaction_id as failed (cannot be resumed)
-        for task_id, interaction_id in incomplete_tasks:
-            if not interaction_id:
-                # No interaction_id means task never got an API response - mark as failed
-                try:
-                    state_manager.update_task(task_id, {
-                        "status": TaskStatus.FAILED,
-                        "error_message": "Task interrupted before API response (no interaction_id)"
-                    })
-                    logger.warning(f"Marked task {task_id} as failed (no interaction_id)")
-                except Exception as e:
-                    logger.error(f"Failed to mark task {task_id} as failed: {e}")
+        for task_id, interaction_id in unresumable:
+            try:
+                state_manager.update_task(task_id, {
+                    "status": TaskStatus.FAILED,
+                    "error_message": "Task interrupted before API response (no interaction_id)"
+                })
+                logger.warning(f"Marked task {task_id} as failed (no interaction_id)")
+            except Exception as e:
+                logger.error(f"Failed to mark task {task_id} as failed: {e}")
+
+        # Resume tasks that have an interaction_id
+        for task_id, interaction_id in resumable:
+            task = state_manager.get_task(task_id)
+            if not task:
+                continue
+
+            bg_task = asyncio.create_task(
+                _background_poll_and_save(
+                    task_id=task_id,
+                    interaction_id=interaction_id,
+                    enable_notifications=task.enable_notifications,
+                    max_wait_seconds=task.max_wait_hours * 3600,
+                    created_at=task.created_at
+                )
+            )
+            _background_tasks[task_id] = bg_task
+            logger.info(f"Resumed background polling for task {task_id[:8]}")
 
     except Exception as e:
         logger.error(f"Startup recovery failed: {e}")
@@ -227,88 +256,150 @@ async def on_server_startup():
 # Deep Research Tools (Wave 4-5: US1 MVP)
 # ============================================================================
 
-@mcp.tool(task=True)
+async def _background_poll_and_save(
+    task_id: str,
+    interaction_id: str,
+    enable_notifications: bool,
+    max_wait_seconds: int,
+    created_at: datetime
+):
+    """Fire-and-forget coroutine: polls Gemini until complete, saves to SQLite.
+
+    This runs entirely in the background after start_deep_research returns.
+    The MCP tool call is already done — this is a server-internal coroutine.
+    Registered in _background_tasks for cancellation support.
+    """
+    try:
+        def on_progress(progress_pct: int, action: str):
+            state_manager.update_task(task_id, {
+                "progress": progress_pct,
+                "current_action": action
+            })
+
+        final_result = await deep_research_engine.poll_until_complete(
+            interaction_id,
+            task_id=task_id,
+            on_progress=on_progress,
+            max_wait_seconds=max_wait_seconds
+        )
+
+        # Save results to SQLite
+        research_result = deep_research_engine.create_research_result(task_id, final_result)
+        metadata = final_result.get("metadata", {})
+
+        state_manager.save_result(task_id, research_result)
+        state_manager.update_task(task_id, {
+            "status": TaskStatus.COMPLETED,
+            "progress": 100,
+            "tokens_input": metadata.get("tokens_input", 0),
+            "tokens_output": metadata.get("tokens_output", 0),
+            "completed_at": datetime.utcnow()
+        })
+
+        # Desktop notification
+        if enable_notifications and notifier:
+            try:
+                duration_minutes = (datetime.utcnow() - created_at).total_seconds() / 60
+                notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
+                if not notification_sent:
+                    logger.warning(f"Desktop notification failed for task {task_id[:8]}")
+            except Exception as notify_err:
+                logger.warning(f"Notification error for {task_id[:8]}: {notify_err}")
+
+        logger.info(f"Background task {task_id[:8]} completed and saved to SQLite")
+
+    except asyncio.CancelledError:
+        logger.info(f"Background task {task_id[:8]} was cancelled")
+        try:
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.CANCELLED,
+                "completed_at": datetime.utcnow(),
+                "current_action": "Cancelled by user"
+            })
+        except Exception as db_err:
+            logger.error(f"Failed to update cancelled status for {task_id[:8]}: {db_err}")
+
+    except Exception as e:
+        logger.error(f"Background polling failed for {task_id[:8]}: {e}")
+        try:
+            state_manager.update_task(task_id, {
+                "status": TaskStatus.FAILED,
+                "error_message": str(e)
+            })
+        except Exception as db_err:
+            logger.critical(f"Failed to update error status for {task_id[:8]}: {db_err}")
+        try:
+            if notifier:
+                notifier.notify_research_failed(task_id, str(e))
+        except Exception as notify_err:
+            logger.warning(f"Failed to send failure notification for {task_id[:8]}: {notify_err}")
+
+    finally:
+        # Always clean up the task registry
+        _background_tasks.pop(task_id, None)
+
+
+@mcp.tool()
 async def start_deep_research(
     query: str,
     enable_notifications: bool = True,
     max_wait_hours: int = 8,
     model: str = "deep-research-pro-preview-12-2025",
-    progress: Progress = Progress()
 ) -> Dict[str, Any]:
     """Start a deep research task using Gemini Deep Research API.
 
-    🚀 **FastMCP Task Support**: This tool uses native MCP background tasks.
-    You can start research and continue with other work - you'll be notified
-    when complete.
+    **Returns task_id in seconds** — research runs in background, never times out.
 
-    **Token-Efficient Usage Pattern**:
+    **Usage Pattern**:
     ```
-    # Step 1: Start research (returns task_id)
-    result = await start_deep_research("What is quantum entanglement?")
+    # Step 1: Start research (returns task_id in <5 seconds)
+    result = start_deep_research("What is quantum entanglement?")
+    task_id = result["task_id"]
 
-    # Step 2: Do other work (research runs in background)
-    # ... work on other tasks ...
+    # Step 2: Do other work while research runs (5-40 minutes)
 
-    # Step 3: You'll receive a notification when complete
-    # FastMCP automatically notifies via MCP protocol
+    # Step 3: Check if done
+    status = check_research_status(task_id)
 
-    # Step 4: Retrieve results (zero-cost - from SQLite cache)
-    final_result = await get_research_results(result["task_id"])
+    # Step 4: Retrieve results (zero-cost from SQLite)
+    final = get_research_results(task_id)
     ```
 
-    **Why This Saves Tokens**:
-    - No need to manually check status repeatedly
-    - No context window wasted on polling
-    - Single notification when complete
-    - Results cached in SQLite for instant retrieval
+    **How It Works**:
+    1. Saves task to SQLite immediately
+    2. Calls Gemini Interactions API to start research (~2-5 seconds)
+    3. Saves interaction_id to SQLite for recovery
+    4. Launches background polling coroutine (fire-and-forget)
+    5. Returns task_id to caller — tool call completes in seconds
 
-    Gemini Deep Research natively handles multi-hop reasoning, automatic
-    query refinement, and source synthesis. This tool wraps that capability
-    with hybrid sync-to-async execution using SQLite for state persistence
-    and asyncio for background tasks.
-
-    **Expected Duration**:
+    **Expected Research Duration**:
     - Simple queries: 5-15 minutes
     - Complex queries: 20-40 minutes
     - Maximum timeout: 60 minutes
 
-    **Hybrid Execution Pattern**:
-    1. Attempts synchronous completion (30-second timeout)
-    2. If query completes quickly: returns full results immediately
-    3. If timeout exceeded: switches to async background execution
-
-    **Token Economics**:
-    - HIGH token cost (Gemini API usage)
-    - Results cached in SQLite for zero-cost retrieval via get_research_results
+    **Why This Never Times Out**:
+    - The tool call returns in <5 seconds with the task_id
+    - Background polling runs as a server-internal coroutine
+    - Results are saved to SQLite when Gemini completes
+    - Desktop notification sent on completion
 
     Args:
         query: Research question or topic to investigate (3-10000 chars).
-               More specific queries yield better results.
         enable_notifications: Send desktop notification on completion (default: True)
-        max_wait_hours: Maximum hours for async research before timeout (1-24, default: 8)
+        max_wait_hours: Maximum hours for background polling (1-24, default: 8)
         model: Gemini model for research (default: deep-research-pro-preview-12-2025)
 
     Returns:
-        Dict with task_id, status, and either results (sync) or async tracking info
+        Dict with task_id and status. Use check_research_status or
+        get_research_results to monitor/retrieve.
 
     Example:
-        >>> # Start research
-        >>> result = await start_deep_research(
-        ...     "Latest advances in quantum computing"
-        ... )
-        >>>
-        >>> # If completed immediately (unlikely for deep research):
-        >>> if result["status"] == "completed":
-        ...     print(result["results"]["report"])
-        >>>
-        >>> # If running async (typical):
-        >>> else:
-        ...     task_id = result["task_id"]
-        ...     # Wait for notification (no manual polling needed!)
-        ...     # Then retrieve when notified:
-        ...     final = await get_research_results(task_id)
+        >>> result = start_deep_research("Latest advances in quantum computing")
+        >>> task_id = result["task_id"]  # Available immediately
+        >>> # ... later ...
+        >>> final = get_research_results(task_id)
     """
-    # Check availability per Constitution Principle III
+    # Check availability
     if not DEEP_RESEARCH_AVAILABLE or not deep_research_engine:
         return {
             "success": False,
@@ -334,10 +425,10 @@ async def start_deep_research(
             "suggestion": "Shorten your query or break into multiple questions"
         }
 
-    # Generate unique task ID
+    # Generate unique task ID and save to SQLite FIRST (before any API call)
     task_id = str(uuid.uuid4())
+    created_at = datetime.utcnow()
 
-    # Create task in SQLite (PENDING)
     task = ResearchTask(
         task_id=task_id,
         query=query,
@@ -345,168 +436,68 @@ async def start_deep_research(
         status=TaskStatus.PENDING,
         enable_notifications=enable_notifications,
         max_wait_hours=max_wait_hours,
-        created_at=datetime.utcnow()
+        created_at=created_at
     )
     state_manager.save_task(task)
     logger.info(f"Created research task {task_id[:8]}: {query[:50]}...")
 
-    # IMMEDIATELY emit task_id via progress so client has it before any API calls
-    # This ensures task_id is visible even if the tool call times out later
-    await progress.set_message(f"TASK_ID:{task_id}")
-    await progress.set_total(100)
-
-    # Update status to RUNNING
-    state_manager.update_task(task_id, {"status": TaskStatus.RUNNING})
-
-    # Bridge function to connect engine progress callbacks to FastMCP Progress API
-    def progress_bridge(progress_pct: int, action: str):
-        """Bridge between engine callbacks and FastMCP progress reporting."""
-        # Update SQLite (synchronous)
-        state_manager.update_task(task_id, {
-            "progress": progress_pct,
-            "current_action": action
-        })
-        # Schedule FastMCP progress updates (non-blocking)
-        # These run asynchronously without blocking the polling loop
-        asyncio.create_task(progress.set_total(100))
-        asyncio.create_task(progress.set_message(action))
-
+    # Start research via Gemini Interactions API
+    # This is the only blocking call — typically 2-5 seconds
     try:
-        # Attempt sync completion with 30-second timeout
-        result = await deep_research_engine.execute_with_timeout(
-            query=query,
-            model=model,
-            timeout_seconds=30,
-            on_progress=progress_bridge
-        )
-
-        if result.get("status") == "completed":
-            # Sync completion - save results and return
-            raw_result = result.get("result", {})
-            research_result = deep_research_engine.create_research_result(task_id, raw_result)
-
-            # Update tokens and cost
-            metadata = raw_result.get("metadata", {})
-            tokens_input = metadata.get("tokens_input", 0)
-            tokens_output = metadata.get("tokens_output", 0)
-
-            state_manager.save_result(task_id, research_result)
-            state_manager.update_task(task_id, {
-                "status": TaskStatus.COMPLETED,
-                "progress": 100,
-                "tokens_input": tokens_input,
-                "tokens_output": tokens_output,
-                "completed_at": datetime.utcnow()
-            })
-
-            logger.info(f"Task {task_id[:8]} completed synchronously")
-
-            return {
-                "success": True,
-                "task_id": task_id,
-                "status": "completed",
-                "mode": "sync",
-                "results": {
-                    "report": research_result.report,
-                    "sources": [s.to_dict() for s in research_result.sources],
-                    "metadata": {
-                        "duration_minutes": round(
-                            (datetime.utcnow() - task.created_at).total_seconds() / 60, 2
-                        ),
-                        "tokens_used": {"input": tokens_input, "output": tokens_output},
-                        "cost_usd": round(
-                            tokens_input * 0.000001 + tokens_output * 0.000004, 4
-                        )
-                    }
-                }
-            }
-
-        else:
-            # Sync timeout - continue polling in background
-            # FastMCP's task wrapper automatically makes this async
-            interaction_id = result.get("interaction_id")
-
-            # Save interaction_id for crash recovery
-            state_manager.update_task(task_id, {
-                "status": TaskStatus.RUNNING_ASYNC,
-                "interaction_id": interaction_id,
-                "current_action": "Running in background..."
-            })
-
-            logger.info(f"Task {task_id[:8]} switched to async mode")
-
-            # Continue polling - FastMCP handles background execution
-            final_result = await deep_research_engine.poll_until_complete(
-                interaction_id,
-                task_id=task_id,
-                on_progress=progress_bridge,
-                max_wait_seconds=max_wait_hours * 3600
-            )
-
-            # Create and save result
-            research_result = deep_research_engine.create_research_result(
-                task_id, final_result
-            )
-            metadata = final_result.get("metadata", {})
-
-            # Save results to SQLite
-            state_manager.save_result(task_id, research_result)
-            state_manager.update_task(task_id, {
-                "status": TaskStatus.COMPLETED,
-                "progress": 100,
-                "tokens_input": metadata.get("tokens_input", 0),
-                "tokens_output": metadata.get("tokens_output", 0),
-                "completed_at": datetime.utcnow()
-            })
-
-            # Send notification if enabled
-            if enable_notifications and notifier:
-                duration_minutes = (
-                    datetime.utcnow() - task.created_at
-                ).total_seconds() / 60
-                notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
-                if not notification_sent:
-                    logger.warning(f"Desktop notification failed for task {task_id[:8]} - check DISPLAY/DBUS environment")
-
-            logger.info(f"Task {task_id[:8]} completed asynchronously")
-
-            return {
-                "success": True,
-                "task_id": task_id,
-                "status": "completed",
-                "mode": "async",
-                "results": {
-                    "report": research_result.report,
-                    "sources": [s.to_dict() for s in research_result.sources],
-                    "metadata": {
-                        "duration_minutes": round(
-                            (datetime.utcnow() - task.created_at).total_seconds() / 60, 2
-                        ),
-                        "tokens_used": {
-                            "input": metadata.get("tokens_input", 0),
-                            "output": metadata.get("tokens_output", 0)
-                        },
-                        "cost_usd": round(
-                            metadata.get("tokens_input", 0) * 0.000001 +
-                            metadata.get("tokens_output", 0) * 0.000004, 4
-                        )
-                    }
-                }
-            }
-
+        start_result = await deep_research_engine.start_research(query, model)
     except Exception as e:
-        logger.error(f"Research failed for {task_id[:8]}: {e}")
+        logger.error(f"Failed to start Gemini research for {task_id[:8]}: {e}")
         state_manager.update_task(task_id, {
             "status": TaskStatus.FAILED,
-            "error_message": str(e)
+            "error_message": f"Failed to start research: {str(e)}"
         })
         return {
             "success": False,
             "task_id": task_id,
-            "error": "RESEARCH_FAILED",
-            "message": f"Research failed: {str(e)}",
-            "suggestion": "Check query and try again, or check server logs for details"
+            "error": "API_START_FAILED",
+            "message": f"Failed to start Gemini research: {str(e)}",
+            "suggestion": "Check API key and network, then retry"
         }
+
+    interaction_id = start_result.get("interaction_id")
+
+    # Save interaction_id to SQLite IMMEDIATELY (critical for recovery)
+    state_manager.update_task(task_id, {
+        "status": TaskStatus.RUNNING_ASYNC,
+        "interaction_id": interaction_id,
+        "current_action": "Research started, polling in background..."
+    })
+
+    logger.info(f"Task {task_id[:8]} started with interaction_id {interaction_id}")
+
+    # Launch background polling — registered in _background_tasks for cancellation
+    bg_task = asyncio.create_task(
+        _background_poll_and_save(
+            task_id=task_id,
+            interaction_id=interaction_id,
+            enable_notifications=enable_notifications,
+            max_wait_seconds=max_wait_hours * 3600,
+            created_at=created_at
+        )
+    )
+    _background_tasks[task_id] = bg_task
+
+    return {
+        "success": True,
+        "task_id": task_id,
+        "status": "running",
+        "interaction_id": interaction_id,
+        "message": (
+            f"Research started and running in background. "
+            f"Expected duration: 5-40 minutes. "
+            f"Use check_research_status('{task_id}') to monitor progress, "
+            f"or get_research_results('{task_id}') when complete."
+        ),
+        "next_steps": [
+            f"check_research_status(task_id='{task_id}')",
+            f"get_research_results(task_id='{task_id}')"
+        ]
+    }
 
 
 @mcp.tool()
@@ -516,27 +507,22 @@ def get_research_results(
 ) -> Dict[str, Any]:
     """Retrieve completed research results from SQLite storage.
 
-    💰 **Zero-Cost Retrieval**: This function reads from SQLite cache - NO Gemini API calls!
+    💰 **Zero-Cost Retrieval**: Reads from SQLite cache - NO Gemini API calls!
 
-    **Token-Efficient Pattern with FastMCP Tasks (v3.8.0):**
-    1. Call `start_deep_research(query)` - returns task_id
-    2. Continue other work - FastMCP notifies when complete
-    3. Call THIS function to retrieve results - zero tokens used!
-
-    **Why This Saves Tokens:**
-    - Research results stored in SQLite during execution
-    - This function just reads from database (instant, free)
-    - No API calls, no token consumption
-    - Can be called multiple times without cost
+    **Usage Pattern (v3.9.0):**
+    1. Call `start_deep_research(query)` - returns task_id in seconds
+    2. Research runs in background (5-40 minutes)
+    3. Use `check_research_status(task_id)` to monitor progress
+    4. Call THIS function to retrieve results when complete - zero tokens!
 
     **Usage Example:**
     ```python
-    # Step 1: Start research
+    # Step 1: Start research (returns immediately)
     result = start_deep_research("quantum computing")
     task_id = result["task_id"]
 
-    # Step 2: Get notified when complete (automatic)
-    # ... FastMCP sends notification ...
+    # Step 2: Check if done (or wait for desktop notification)
+    status = check_research_status(task_id)
 
     # Step 3: Retrieve results (zero tokens)
     final_result = get_research_results(task_id)
@@ -658,41 +644,23 @@ def get_research_results(
 def check_research_status(task_id: str) -> Dict[str, Any]:
     """Check status of a running deep research task.
 
-    ⚠️ **FastMCP Task Support (v3.8.0)**: Manual polling is NO LONGER NEEDED!
-
-    When you call `start_deep_research`, FastMCP automatically notifies you when
-    research completes. You should ONLY use this function if:
-    - You want to check progress for informational purposes
-    - You're debugging a specific task
-    - You need current status without waiting for completion
-
-    **Recommended Pattern:**
+    **Usage (v3.9.0):**
     ```python
-    # Start research - FastMCP handles background execution
+    # Start research (returns immediately with task_id)
     result = start_deep_research("query")
+    task_id = result["task_id"]
 
-    # Continue other work - you'll be notified when done
-    # NO NEED to call check_research_status repeatedly!
-
-    # When notified, retrieve results:
-    final = get_research_results(result["task_id"])
-    ```
-
-    **Old Pattern (NO LONGER NEEDED):**
-    ```python
-    # ❌ DON'T DO THIS - wastes tokens!
-    while True:
-        status = check_research_status(task_id)
-        if status["status"] == "completed":
-            break
-        await asyncio.sleep(30)
+    # Check progress periodically (or wait for desktop notification)
+    status = check_research_status(task_id)
+    if status["status"] == "completed":
+        final = get_research_results(task_id)
     ```
 
     **Zero Token Cost** - Reads from local SQLite database, no Gemini API calls.
 
-    Use this tool to monitor the progress of async research tasks. It provides
-    real-time status including progress percentage, current action, elapsed time,
-    and estimated completion time.
+    Research runs in the background on the server. A desktop notification is
+    sent when complete (if enabled). Use this to check progress or confirm
+    completion before calling get_research_results.
 
     Args:
         task_id: Task UUID from start_deep_research response
@@ -1054,14 +1022,19 @@ def cancel_research(
             existing_result.metadata["partial"] = True
             state_manager.save_result(task_id, existing_result)
 
-    # Task cancellation now handled by updating SQLite status
-    # FastMCP will see the cancelled status and stop polling
-    state_manager.update_task(task_id, {
-        "status": TaskStatus.CANCELLED,
-        "current_action": f"Cancelled at {progress_at_cancellation}% progress",
-        "cost_usd": cost_usd,
-        "completed_at": datetime.utcnow()
-    })
+    # Cancel the background polling coroutine if it's running
+    bg_task = _background_tasks.get(task_id)
+    if bg_task and not bg_task.done():
+        bg_task.cancel()
+        logger.info(f"Cancelled background polling coroutine for {task_id[:8]}")
+    else:
+        # Background task not found — update SQLite directly
+        state_manager.update_task(task_id, {
+            "status": TaskStatus.CANCELLED,
+            "current_action": f"Cancelled at {progress_at_cancellation}% progress",
+            "cost_usd": cost_usd,
+            "completed_at": datetime.utcnow()
+        })
 
     logger.info(f"Research task {task_id} cancelled at {progress_at_cancellation}%")
 
