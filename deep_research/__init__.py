@@ -17,6 +17,7 @@ class TaskStatus(str, Enum):
     RUNNING = "running"           # In progress (sync attempt)
     RUNNING_ASYNC = "running_async"  # Background async execution
     COMPLETED = "completed"       # Successfully finished
+    COMPLETED_PARTIAL = "completed_partial"  # Auto-completed from partial results (hung task)
     FAILED = "failed"             # Error during execution
     CANCELLED = "cancelled"       # User-initiated cancellation
 

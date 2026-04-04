@@ -268,6 +268,10 @@ async def _background_poll_and_save(
     This runs entirely in the background after start_deep_research returns.
     The MCP tool call is already done — this is a server-internal coroutine.
     Registered in _background_tasks for cancellation support.
+
+    Handles partial results: if the Gemini API gets stuck (common at 99%),
+    the engine will force-complete with whatever data it has. We detect this
+    via the _is_partial / _completion_reason keys in the result dict.
     """
     try:
         def on_progress(progress_pct: int, action: str):
@@ -283,38 +287,60 @@ async def _background_poll_and_save(
             max_wait_seconds=max_wait_seconds
         )
 
+        # Detect partial vs full completion
+        is_partial = final_result.get("_is_partial", False)
+        completion_reason = final_result.get("_completion_reason", "api_completed")
+
         # Save results to SQLite
         research_result = deep_research_engine.create_research_result(task_id, final_result)
         metadata = final_result.get("metadata", {})
 
+        # Enrich metadata with completion info
+        if is_partial:
+            research_result.metadata["_is_partial"] = True
+            research_result.metadata["_completion_reason"] = completion_reason
+
         state_manager.save_result(task_id, research_result)
+
+        # Use COMPLETED_PARTIAL for forced completions, COMPLETED for clean ones
+        final_status = TaskStatus.COMPLETED_PARTIAL if is_partial else TaskStatus.COMPLETED
+
         state_manager.update_task(task_id, {
-            "status": TaskStatus.COMPLETED,
+            "status": final_status,
             "progress": 100,
             "tokens_input": metadata.get("tokens_input", 0),
             "tokens_output": metadata.get("tokens_output", 0),
-            "completed_at": datetime.utcnow()
+            "completed_at": datetime.utcnow(),
+            "current_action": f"Complete ({completion_reason})" if is_partial else "Research complete"
         })
 
         # Desktop notification
         if enable_notifications and notifier:
             try:
                 duration_minutes = (datetime.utcnow() - created_at).total_seconds() / 60
-                notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
+                if is_partial:
+                    notification_sent = notifier.notify_research_complete(
+                        task_id, duration_minutes,
+                    )
+                else:
+                    notification_sent = notifier.notify_research_complete(task_id, duration_minutes)
                 if not notification_sent:
                     logger.warning(f"Desktop notification failed for task {task_id[:8]}")
             except Exception as notify_err:
                 logger.warning(f"Notification error for {task_id[:8]}: {notify_err}")
 
-        logger.info(f"Background task {task_id[:8]} completed and saved to SQLite")
+        status_label = "partially completed (forced)" if is_partial else "completed"
+        logger.info(f"Background task {task_id[:8]} {status_label} and saved to SQLite ({completion_reason})")
 
     except asyncio.CancelledError:
         logger.info(f"Background task {task_id[:8]} was cancelled")
         try:
+            # Try to save partial results on cancellation too
+            _save_partial_on_failure(task_id, "cancelled_by_user")
             state_manager.update_task(task_id, {
                 "status": TaskStatus.CANCELLED,
                 "completed_at": datetime.utcnow(),
-                "current_action": "Cancelled by user"
+                "current_action": "Cancelled by user (partial results may be available)"
             })
         except Exception as db_err:
             logger.error(f"Failed to update cancelled status for {task_id[:8]}: {db_err}")
@@ -322,9 +348,13 @@ async def _background_poll_and_save(
     except Exception as e:
         logger.error(f"Background polling failed for {task_id[:8]}: {e}")
         try:
+            # Try to save partial results on failure
+            had_partial = _save_partial_on_failure(task_id, f"error: {str(e)[:200]}")
             state_manager.update_task(task_id, {
-                "status": TaskStatus.FAILED,
-                "error_message": str(e)
+                "status": TaskStatus.COMPLETED_PARTIAL if had_partial else TaskStatus.FAILED,
+                "error_message": str(e),
+                "completed_at": datetime.utcnow(),
+                "current_action": "Failed with partial results saved" if had_partial else f"Failed: {str(e)[:100]}"
             })
         except Exception as db_err:
             logger.critical(f"Failed to update error status for {task_id[:8]}: {db_err}")
@@ -337,6 +367,41 @@ async def _background_poll_and_save(
     finally:
         # Always clean up the task registry
         _background_tasks.pop(task_id, None)
+
+
+def _save_partial_on_failure(task_id: str, reason: str) -> bool:
+    """Attempt to save any intermediate results from a failed/cancelled task.
+
+    Returns True if partial results were saved, False otherwise.
+    """
+    try:
+        intermediate = deep_research_engine.get_intermediate_results(task_id)
+        if not intermediate:
+            logger.debug(f"No intermediate results to save for {task_id[:8]}")
+            return False
+
+        best_result = max(intermediate, key=len)
+        if not best_result or len(best_result) < 50:  # Skip trivially small fragments
+            return False
+
+        from deep_research import ResearchResult
+        partial_result = ResearchResult(
+            task_id=task_id,
+            report=best_result,
+            sources=[],
+            metadata={
+                "_is_partial": True,
+                "_completion_reason": reason,
+                "_intermediate_count": len(intermediate),
+                "_best_result_chars": len(best_result),
+            }
+        )
+        state_manager.save_result(task_id, partial_result)
+        logger.info(f"Saved partial result for {task_id[:8]}: {len(best_result)} chars ({reason})")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save partial results for {task_id[:8]}: {e}")
+        return False
 
 
 @mcp.tool()
@@ -503,44 +568,41 @@ async def start_deep_research(
 @mcp.tool()
 def get_research_results(
     task_id: str,
-    include_sources: bool = True
+    include_sources: bool = True,
+    force_retrieve: bool = False
 ) -> Dict[str, Any]:
     """Retrieve completed research results from SQLite storage.
 
     💰 **Zero-Cost Retrieval**: Reads from SQLite cache - NO Gemini API calls!
 
-    **Usage Pattern (v3.9.0):**
+    **Usage Pattern (v3.9.0+):**
     1. Call `start_deep_research(query)` - returns task_id in seconds
     2. Research runs in background (5-40 minutes)
     3. Use `check_research_status(task_id)` to monitor progress
     4. Call THIS function to retrieve results when complete - zero tokens!
 
+    **Stuck at 99%?** Use `force_retrieve=True` to get partial results from
+    hung tasks. The system auto-saves intermediate results, so even if the
+    Gemini API never returns "completed", you can still get the data.
+
     **Usage Example:**
     ```python
-    # Step 1: Start research (returns immediately)
-    result = start_deep_research("quantum computing")
-    task_id = result["task_id"]
-
-    # Step 2: Check if done (or wait for desktop notification)
-    status = check_research_status(task_id)
-
-    # Step 3: Retrieve results (zero tokens)
+    # Normal retrieval
     final_result = get_research_results(task_id)
-    print(final_result["report"])  # Full research report
 
-    # Step 4: Retrieve again later if needed (still zero tokens)
-    same_result = get_research_results(task_id)  # Instant, free!
+    # Force retrieve from stuck/failed task
+    partial = get_research_results(task_id, force_retrieve=True)
+    if partial["success"]:
+        print(partial["report"])  # May be partial but still useful
     ```
 
     **Zero Token Cost** - Reads from local SQLite database, no Gemini API calls.
 
-    This tool retrieves previously completed deep research results. Results are
-    stored permanently in SQLite until explicitly deleted, allowing multiple
-    retrievals without additional API costs.
-
     Args:
         task_id: Task UUID from start_deep_research response
         include_sources: Include source list in response (default: True)
+        force_retrieve: If True, retrieve results even from non-completed tasks.
+            Useful when research is stuck at 99% or failed with partial data.
 
     Returns:
         Dict with report, sources (optional), and metadata if completed;
@@ -582,21 +644,38 @@ def get_research_results(
             "suggestion": "Verify task_id from start_deep_research response"
         }
 
-    # Check if completed
-    if task.status != TaskStatus.COMPLETED:
+    # Retrievable statuses: completed, completed_partial, or force_retrieve
+    retrievable_statuses = {TaskStatus.COMPLETED, TaskStatus.COMPLETED_PARTIAL}
+    is_retrievable = task.status in retrievable_statuses or force_retrieve
+
+    # Check if completed (or force_retrieve)
+    if not is_retrievable:
+        stuck_hint = ""
+        if task.progress >= 95:
+            stuck_hint = " TIP: Use force_retrieve=True to get partial results from this stuck task."
         return {
             "success": False,
             "error": "RESEARCH_NOT_COMPLETED",
             "task_id": task_id,
             "status": task.status.value,
             "progress": task.progress,
-            "message": f"Research is still in progress. Current progress: {task.progress}%",
-            "suggestion": "Wait for completion or use check_research_status to monitor"
+            "message": f"Research is still in progress. Current progress: {task.progress}%.{stuck_hint}",
+            "suggestion": "Wait for completion, use check_research_status to monitor, or set force_retrieve=True"
         }
 
     # Get results from SQLite
     result = state_manager.get_result(task_id)
     if not result:
+        if force_retrieve:
+            return {
+                "success": False,
+                "error": "NO_PARTIAL_DATA",
+                "task_id": task_id,
+                "status": task.status.value,
+                "progress": task.progress,
+                "message": "No results saved yet (partial or complete). Research may still be in early stages.",
+                "suggestion": "Wait longer and try again, or cancel with cancel_research"
+            }
         return {
             "success": False,
             "error": "RESEARCH_FAILED",
@@ -607,8 +686,16 @@ def get_research_results(
 
     # Calculate duration
     duration_minutes = 0
-    if task.created_at and task.completed_at:
-        duration_minutes = (task.completed_at - task.created_at).total_seconds() / 60
+    end_time = task.completed_at or datetime.utcnow()
+    if task.created_at:
+        duration_minutes = (end_time - task.created_at).total_seconds() / 60
+
+    # Determine if this is a partial result
+    is_partial = (
+        task.status == TaskStatus.COMPLETED_PARTIAL
+        or force_retrieve
+        or result.metadata.get("_is_partial", False)
+    )
 
     # Build response per contract
     response = {
@@ -616,6 +703,7 @@ def get_research_results(
         "task_id": task_id,
         "query": task.query,
         "report": result.report,
+        "is_partial": is_partial,
         "metadata": {
             "duration_minutes": round(duration_minutes, 2),
             "tokens_used": {
@@ -629,9 +717,16 @@ def get_research_results(
             "model": task.model,
             "source_count": len(result.sources),
             "started_at": task.created_at.isoformat() if task.created_at else None,
-            "completed_at": task.completed_at.isoformat() if task.completed_at else None
+            "completed_at": task.completed_at.isoformat() if task.completed_at else None,
+            "completion_reason": result.metadata.get("_completion_reason", "api_completed"),
         }
     }
+
+    if is_partial:
+        response["partial_warning"] = (
+            "This result was auto-captured from a hung/failed research task. "
+            "The report may be incomplete but contains the best available data."
+        )
 
     # Include sources if requested
     if include_sources:
@@ -724,19 +819,23 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
     )
 
     # Build response based on status
-    if task.status == TaskStatus.COMPLETED:
+    if task.status in (TaskStatus.COMPLETED, TaskStatus.COMPLETED_PARTIAL):
+        is_partial = task.status == TaskStatus.COMPLETED_PARTIAL
         return {
             "success": True,
             "task_id": task_id,
-            "status": "completed",
+            "status": task.status.value,
             "progress": 100,
-            "current_action": "Research complete",
+            "current_action": "Research complete (partial)" if is_partial else "Research complete",
             "elapsed_minutes": elapsed_minutes,
+            "is_partial": is_partial,
             "message": f"Use get_research_results(task_id='{task_id}') to retrieve results"
         }
 
     elif task.status == TaskStatus.FAILED:
-        return {
+        # Check if partial results were saved
+        has_partial = state_manager.get_result(task_id) is not None
+        response = {
             "success": False,
             "task_id": task_id,
             "status": "failed",
@@ -744,9 +843,14 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
             "error_message": task.error_message or "Unknown error",
             "elapsed_minutes": elapsed_minutes
         }
+        if has_partial:
+            response["has_partial_results"] = True
+            response["suggestion"] = f"Partial results available! Use get_research_results(task_id='{task_id}', force_retrieve=True)"
+        return response
 
     elif task.status == TaskStatus.CANCELLED:
-        return {
+        has_partial = state_manager.get_result(task_id) is not None
+        response = {
             "success": True,
             "task_id": task_id,
             "status": "cancelled",
@@ -754,6 +858,10 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
             "elapsed_minutes": elapsed_minutes,
             "message": "Research was cancelled"
         }
+        if has_partial:
+            response["has_partial_results"] = True
+            response["suggestion"] = f"Partial results saved! Use get_research_results(task_id='{task_id}', force_retrieve=True)"
+        return response
 
     else:
         # Running or running_async
@@ -792,6 +900,13 @@ def check_research_status(task_id: str) -> Dict[str, Any]:
                 if hanging_status.is_hanging:
                     response["warning"] = f"Task may be hung: {hanging_status.reason}"
                     response["suggestion"] = hanging_status.recommendation
+                # Suggest force_retrieve for tasks stuck at high progress
+                if task.progress >= 95 and elapsed_minutes > 20:
+                    response["force_retrieve_available"] = True
+                    response["force_retrieve_hint"] = (
+                        f"Task stuck at {task.progress}% for {elapsed_minutes:.0f} min. "
+                        f"Try: get_research_results(task_id='{task_id}', force_retrieve=True)"
+                    )
             except Exception as e:
                 logger.debug(f"Could not check hanging status: {e}")
 
@@ -832,13 +947,13 @@ def list_research_tasks(
     limit = max(1, min(limit, 100))
 
     # Validate status_filter
-    valid_statuses = {"running", "pending", "completed", "failed", "cancelled", None}
+    valid_statuses = {"running", "pending", "completed", "completed_partial", "failed", "cancelled", None}
     if status_filter and status_filter.lower() not in {s for s in valid_statuses if s}:
         return {
             "success": False,
             "error": "INVALID_FILTER",
             "message": f"Invalid status_filter: {status_filter}",
-            "suggestion": f"Use one of: running, pending, completed, failed, cancelled"
+            "suggestion": f"Use one of: running, pending, completed, completed_partial, failed, cancelled"
         }
 
     try:

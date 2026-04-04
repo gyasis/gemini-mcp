@@ -195,6 +195,9 @@ class DeepResearchEngine:
         start_time = asyncio.get_event_loop().time()
         created_at = datetime.utcnow()
         poll_count = 0
+        # Track how long we've been stuck at 99%
+        stuck_at_99_since: Optional[float] = None
+        STUCK_AT_99_THRESHOLD = 600  # 10 minutes at 99% = force complete
 
         logger.info(f"Polling for completion: {interaction_id}")
 
@@ -203,6 +206,11 @@ class DeepResearchEngine:
                 elapsed = asyncio.get_event_loop().time() - start_time
 
                 if elapsed > max_wait_seconds:
+                    # Save partial results before raising
+                    partial = self._build_partial_result(task_id, interaction_id, elapsed, poll_count)
+                    if partial:
+                        partial["_completion_reason"] = "timeout"
+                        return partial
                     raise TimeoutError(
                         f"Research exceeded max wait time of {max_wait_seconds}s"
                     )
@@ -235,6 +243,14 @@ class DeepResearchEngine:
 
                     logger.debug(f"Poll {poll_count}: status={status}, progress~{progress}%")
 
+                    # Track stuck-at-99 duration
+                    if progress >= 99 and status != "completed":
+                        if stuck_at_99_since is None:
+                            stuck_at_99_since = asyncio.get_event_loop().time()
+                            logger.info(f"Task {task_id} reached 99%, starting stuck timer")
+                    else:
+                        stuck_at_99_since = None
+
                     # Check for hanging if enabled
                     hanging_status = None
                     if check_hanging:
@@ -243,8 +259,40 @@ class DeepResearchEngine:
                             logger.warning(
                                 f"Task {task_id} appears hung: {hanging_status.reason}"
                             )
-                            # Don't auto-cancel, but include warning in result
-                            # Let caller decide what to do
+
+                    # AUTO-COMPLETE: Force complete if stuck at 99% too long OR hanging with high confidence
+                    should_force_complete = False
+                    force_reason = ""
+
+                    if stuck_at_99_since is not None:
+                        stuck_duration = asyncio.get_event_loop().time() - stuck_at_99_since
+                        if stuck_duration > STUCK_AT_99_THRESHOLD:
+                            should_force_complete = True
+                            force_reason = f"stuck_at_99_for_{int(stuck_duration)}s"
+
+                    if hanging_status and hanging_status.is_hanging and hanging_status.confidence >= 0.9:
+                        if elapsed > 1800:  # Only force-complete after 30 min total
+                            should_force_complete = True
+                            force_reason = f"hanging_detected_confidence_{hanging_status.confidence}"
+
+                    if should_force_complete:
+                        logger.warning(
+                            f"Force-completing task {task_id}: {force_reason}. "
+                            f"Attempting to extract results from current interaction state."
+                        )
+                        # Try to parse whatever the API has right now
+                        result = self._parse_interaction(interaction)
+                        if result.get("report"):
+                            result["_completion_reason"] = force_reason
+                            result["_is_partial"] = True
+                            logger.info(f"Force-complete extracted {len(result['report'])} chars of report")
+                            return result
+                        # Fallback: try intermediate results
+                        partial = self._build_partial_result(task_id, interaction_id, elapsed, poll_count)
+                        if partial:
+                            partial["_completion_reason"] = force_reason
+                            return partial
+                        logger.error(f"Force-complete failed: no data available for {task_id}")
 
                     # Call progress callback if provided
                     if on_progress:
@@ -256,6 +304,8 @@ class DeepResearchEngine:
                     if status == "completed":
                         logger.info(f"Research completed after {poll_count} polls ({elapsed:.1f}s)")
                         result = self._parse_interaction(interaction)
+                        result["_completion_reason"] = "api_completed"
+                        result["_is_partial"] = False
                         # Clean up tracking data
                         self.clear_intermediate_results(task_id)
                         return result
@@ -263,16 +313,23 @@ class DeepResearchEngine:
                     elif status == "failed":
                         error_msg = getattr(interaction, 'error', 'Unknown error')
                         logger.error(f"Research failed: {error_msg}")
+                        # Try to save partial results before failing
+                        partial = self._build_partial_result(task_id, interaction_id, elapsed, poll_count)
+                        if partial:
+                            partial["_completion_reason"] = "api_failed_with_partial"
+                            partial["_is_partial"] = True
+                            return partial
                         # Clean up tracking data
                         self.clear_intermediate_results(task_id)
                         raise Exception(f"Research failed: {error_msg}")
 
-                    # Store any partial outputs we can extract
+                    # Store any partial outputs we can extract (deduplicated)
                     try:
                         outputs = getattr(interaction, 'outputs', [])
                         if outputs:
+                            existing = set(self._intermediate_results.get(task_id, []))
                             for output in outputs:
-                                if hasattr(output, 'text') and output.text:
+                                if hasattr(output, 'text') and output.text and output.text not in existing:
                                     self.store_intermediate_result(task_id, output.text)
                     except Exception as e:
                         logger.debug(f"Could not extract intermediate outputs: {e}")
@@ -290,8 +347,51 @@ class DeepResearchEngine:
                     await asyncio.sleep(poll_interval)
 
         finally:
-            # CRITICAL: Always cleanup on exit (success, failure, or timeout)
+            # Clean up tracking data ONLY for successful completions
+            # For partial/forced completions, data is already extracted above
+            # For timeouts/errors, _background_poll_and_save handles saving
+            if task_id in self._intermediate_results:
+                logger.debug(f"Cleaning up {len(self._intermediate_results[task_id])} intermediate results for {task_id}")
             self.clear_intermediate_results(task_id)
+
+    def _build_partial_result(
+        self,
+        task_id: str,
+        interaction_id: str,
+        elapsed: float,
+        poll_count: int
+    ) -> Optional[Dict[str, Any]]:
+        """Build a result from intermediate/partial data when API won't complete.
+
+        Returns None if no partial data is available.
+        """
+        intermediate = self.get_intermediate_results(task_id)
+        if not intermediate:
+            return None
+
+        # Combine intermediate results (last one is usually most complete)
+        # Deduplicate and take the longest/most complete
+        best_result = max(intermediate, key=len) if intermediate else ""
+        if not best_result:
+            return None
+
+        logger.info(
+            f"Building partial result for {task_id}: {len(best_result)} chars "
+            f"from {len(intermediate)} intermediate captures"
+        )
+
+        return {
+            "report": best_result,
+            "sources": [],
+            "metadata": {
+                "interaction_id": interaction_id,
+                "status": "partial",
+                "poll_count": poll_count,
+                "elapsed_seconds": round(elapsed, 1),
+                "_is_partial": True,
+            },
+            "_is_partial": True,
+        }
 
     def _get_action_from_status(self, status: str, elapsed: float) -> str:
         """Generate human-readable action based on status and elapsed time."""
