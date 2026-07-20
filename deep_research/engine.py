@@ -323,14 +323,13 @@ class DeepResearchEngine:
                         self.clear_intermediate_results(task_id)
                         raise Exception(f"Research failed: {error_msg}")
 
-                    # Store any partial outputs we can extract (deduplicated)
+                    # Store any partial output text we can extract (deduplicated)
                     try:
-                        outputs = getattr(interaction, 'outputs', [])
-                        if outputs:
+                        partial_text = self._current_report_text(interaction)
+                        if partial_text:
                             existing = set(self._intermediate_results.get(task_id, []))
-                            for output in outputs:
-                                if hasattr(output, 'text') and output.text and output.text not in existing:
-                                    self.store_intermediate_result(task_id, output.text)
+                            if partial_text not in existing:
+                                self.store_intermediate_result(task_id, partial_text)
                     except Exception as e:
                         logger.debug(f"Could not extract intermediate outputs: {e}")
 
@@ -564,11 +563,60 @@ class DeepResearchEngine:
                 "interaction_id": interaction_id
             }
 
+    @staticmethod
+    def _iter_model_output_text(interaction):
+        """Yield TextContent items from model_output steps (new 'steps' schema, SDK >= 2.0).
+
+        The legacy `interaction.outputs[-1].text` shape was removed in the
+        May-2026 Interactions API migration. The report text now lives in
+        model_output steps' content (TextContent with .text + .annotations),
+        with a convenience `interaction.output_text` aggregate.
+        """
+        steps = getattr(interaction, 'steps', None) or []
+        for step in steps:
+            if getattr(step, 'type', None) == 'model_output':
+                for item in (getattr(step, 'content', None) or []):
+                    if getattr(item, 'text', None):
+                        yield item
+
+    def _extract_report_and_sources(self, interaction):
+        """Extract (report_text, [Source]) from an Interaction (new 'steps' schema)."""
+        # Report text: prefer the convenience aggregate, else concat model_output text.
+        text_items = list(self._iter_model_output_text(interaction))
+        report_text = getattr(interaction, 'output_text', None) or ""
+        if not report_text and text_items:
+            report_text = "\n".join(i.text for i in text_items if getattr(i, 'text', None))
+
+        # Sources: URL citations carried in each TextContent's annotations.
+        sources: List[Source] = []
+        seen = set()
+        for item in text_items:
+            for ann in (getattr(item, 'annotations', None) or []):
+                if getattr(ann, 'type', None) == 'url_citation':
+                    url = getattr(ann, 'url', '') or ''
+                    if url and url not in seen:
+                        seen.add(url)
+                        sources.append(Source(
+                            title=getattr(ann, 'title', '') or 'Source',
+                            url=url,
+                            snippet=""
+                        ))
+        return report_text, sources
+
+    def _current_report_text(self, interaction) -> str:
+        """Best-available report text from an in-progress or completed interaction."""
+        try:
+            text, _ = self._extract_report_and_sources(interaction)
+            return text or ""
+        except Exception as e:
+            logger.debug(f"Could not extract current report text: {e}")
+            return getattr(interaction, 'output_text', None) or ""
+
     def _parse_interaction(self, interaction) -> Dict[str, Any]:
         """Parse an Interaction response into structured result.
 
         Args:
-            interaction: The Interactions API response object
+            interaction: The Interactions API response object (new 'steps' schema)
 
         Returns:
             Dict with report, sources, and metadata
@@ -578,43 +626,24 @@ class DeepResearchEngine:
         metadata: Dict[str, Any] = {}
 
         try:
-            # Extract text from interaction outputs
-            outputs = getattr(interaction, 'outputs', [])
-            if outputs:
-                # Get the last output (final result)
-                last_output = outputs[-1]
-                if hasattr(last_output, 'text'):
-                    report_text = last_output.text
+            report_text, sources = self._extract_report_and_sources(interaction)
 
             # Extract metadata
             metadata['interaction_id'] = getattr(interaction, 'id', None)
             metadata['status'] = getattr(interaction, 'status', None)
 
-            # Extract usage if available
-            if hasattr(interaction, 'usage_metadata'):
-                usage = interaction.usage_metadata
-                metadata['tokens_input'] = getattr(usage, 'prompt_token_count', 0)
-                metadata['tokens_output'] = getattr(usage, 'candidates_token_count', 0)
-
-            # Extract sources from grounding metadata if available
-            if hasattr(interaction, 'grounding_metadata'):
-                grounding = interaction.grounding_metadata
-                if hasattr(grounding, 'grounding_chunks'):
-                    for chunk in grounding.grounding_chunks:
-                        if hasattr(chunk, 'web'):
-                            sources.append(Source(
-                                title=getattr(chunk.web, 'title', 'Unknown'),
-                                url=getattr(chunk.web, 'uri', ''),
-                                snippet=getattr(chunk, 'text', '')[:200] if hasattr(chunk, 'text') else ""
-                            ))
+            # Extract usage if available (renamed usage_metadata -> usage in SDK >= 2.0)
+            usage = getattr(interaction, 'usage', None)
+            if usage is not None:
+                metadata['tokens_input'] = getattr(usage, 'total_input_tokens', 0) or 0
+                metadata['tokens_output'] = getattr(usage, 'total_output_tokens', 0) or 0
+                metadata['tokens_total'] = getattr(usage, 'total_tokens', 0) or 0
 
         except Exception as e:
             logger.warning(f"Error parsing interaction: {e}")
-            # Fallback: try to get any text content
+            # Fallback: at least try the convenience aggregate text
             try:
-                outputs = getattr(interaction, 'outputs', [])
-                if outputs and hasattr(outputs[-1], 'text'):
-                    report_text = outputs[-1].text
+                report_text = getattr(interaction, 'output_text', None) or report_text
             except Exception:
                 pass
 
@@ -750,17 +779,15 @@ class DeepResearchEngine:
 
                 status = getattr(interaction, 'status', 'unknown')
 
-                # Capture any new outputs
-                outputs = getattr(interaction, 'outputs', [])
-                for output in outputs:
-                    if hasattr(output, 'text') and output.text:
-                        # Check if we've already stored this
-                        existing = self.get_intermediate_results(task_id)
-                        if output.text not in existing:
-                            self.store_intermediate_result(task_id, output.text)
-                            chunks_captured += 1
-                            if on_chunk:
-                                on_chunk("output", output.text)
+                # Capture any new output text (new 'steps' schema)
+                output_text = self._current_report_text(interaction)
+                if output_text:
+                    existing = self.get_intermediate_results(task_id)
+                    if output_text not in existing:
+                        self.store_intermediate_result(task_id, output_text)
+                        chunks_captured += 1
+                        if on_chunk:
+                            on_chunk("output", output_text)
 
                 # Progress estimation
                 elapsed_min = elapsed / 60

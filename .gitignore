@@ -41,5 +41,8 @@ llm-usage-prompt.md
 # Deep Research outputs
 research_reports/*.md
 !research_reports/.gitkeep
-deep_research.dbdeep_research/research.db
+deep_research.db
+deep_research/research.db
 research_reports/
+.memory/
+.playwright-mcp/
