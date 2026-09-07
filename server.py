@@ -25,6 +25,39 @@ from dotenv import load_dotenv
 from fastmcp import FastMCP
 import mimetypes
 
+# --- IPv4 preference -------------------------------------------------------
+# On networks that advertise IPv6 but cannot actually reach googleapis.com over
+# it (a common ISP/router misconfiguration), getaddrinfo returns AAAA records
+# first and Python has no happy-eyeballs fallback -- so every Gemini call
+# stalls until timeout and the server appears to hang or report CONNECT_TIMEOUT.
+# Diagnose with: `curl -6 https://generativelanguage.googleapis.com/` (hangs)
+# vs `curl -4 ...` (responds). Measured on one such network: an image request
+# hung >300s with default resolution and completed in 19s with IPv4 forced.
+# Preferring A records is harmless where IPv6 works, since it only reorders
+# candidates. Set GEMINI_MCP_ALLOW_IPV6=1 to disable this preference.
+def _prefer_ipv4() -> None:
+    import socket as _socket
+    if os.environ.get("GEMINI_MCP_ALLOW_IPV6") == "1":
+        return
+    if getattr(_socket, "_gemini_mcp_v4_only", False):
+        return
+    _orig = _socket.getaddrinfo
+
+    def _v4_first(host, port, family=0, *args, **kwargs):
+        try:
+            res = _orig(host, port, _socket.AF_INET, *args, **kwargs)
+            if res:
+                return res
+        except _socket.gaierror:
+            pass
+        return _orig(host, port, family, *args, **kwargs)
+
+    _socket.getaddrinfo = _v4_first
+    _socket._gemini_mcp_v4_only = True
+
+
+_prefer_ipv4()
+
 # Configure logging for deep research
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1581,6 +1614,116 @@ def call_gemini(prompt: str, temperature: float = 0.5, model: str = "gemini-3-fl
         return response.text
     except Exception as e:
         return f"Error calling Gemini: {str(e)}"
+
+IMAGE_MODELS = {
+    "nano-banana-pro": "nano-banana-pro-preview",
+    "nano-banana": "gemini-2.5-flash-image",
+    "pro": "gemini-3-pro-image",
+    "flash": "gemini-3.1-flash-image",
+    "flash-lite": "gemini-3.1-flash-lite-image",
+}
+
+
+@mcp.tool()
+def generate_image(
+    prompt: str,
+    output_path: str,
+    model: str = "nano-banana-pro",
+    reference_images: Optional[List[str]] = None,
+) -> str:
+    """Generate an image from a text prompt using Gemini's image models (Nano Banana) and save it to disk.
+
+    Use this when you need to CREATE a picture rather than analyze one — interpret_image is the
+    read side, this is the write side. Good for:
+    - Logos, app icons and favicons
+    - Illustrations, diagrams and concept art
+    - Mockup imagery, hero images, placeholder art
+    - Editing or restyling an existing image (pass it via reference_images)
+
+    The image is written to output_path and the path is returned; nothing is embedded in the
+    response, so large images never enter the conversation. Always LOOK at the result afterwards
+    (read the file, or build an HTML preview) rather than assuming it matched the prompt.
+
+    Prompting notes that materially change the output:
+    - Describe the SUBJECT, STYLE and BACKGROUND explicitly.
+    - Say "NO TEXT, NO LETTERS" unless you want lettering — these models add text readily and
+      usually render it badly.
+    - For an icon, state the smallest size it must survive ("legible at 48x48 pixels"); models
+      otherwise produce fine detail that disappears when scaled down.
+
+    Args:
+        prompt: What to generate. Specific beats short.
+        output_path: Where to write the PNG. Absolute, or relative to the server's cwd.
+                     Parent directories are created if missing.
+        model: One of nano-banana-pro (default, highest quality), nano-banana, pro,
+               flash, flash-lite — or a raw Gemini model id.
+        reference_images: Optional local image paths to condition on, for editing or
+                          style-matching an existing image.
+    """
+    if not GEMINI_AVAILABLE or not client:
+        return f"❌ Gemini not available: {GEMINI_ERROR}"
+
+    model_id = IMAGE_MODELS.get(model, model)
+    parts: List[Any] = [prompt]
+    try:
+        for ref in (reference_images or []):
+            rp = Path(ref).expanduser()
+            if not rp.is_file():
+                return f"❌ Reference image not found: {rp}"
+            mime = mimetypes.guess_type(str(rp))[0] or "image/png"
+            parts.append(types.Part.from_bytes(data=rp.read_bytes(), mime_type=mime))
+    except Exception as e:
+        return f"❌ Could not read reference image: {e}"
+
+    try:
+        response = client.models.generate_content(
+            model=model_id,
+            contents=parts,
+            config=types.GenerateContentConfig(response_modalities=["IMAGE"]),
+        )
+    except Exception as e:
+        return f"❌ Image generation failed ({model_id}): {e}"
+
+    out = Path(output_path).expanduser()
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return f"❌ Cannot create output directory {out.parent}: {e}"
+
+    for cand in (response.candidates or []):
+        for part in (cand.content.parts if cand.content else []):
+            inline = getattr(part, "inline_data", None)
+            if inline and getattr(inline, "data", None):
+                try:
+                    out.write_bytes(inline.data)
+                except Exception as e:
+                    return f"❌ Could not write {out}: {e}"
+                size = out.stat().st_size
+                return (f"🎨 Image generated with {model_id}\n\n"
+                        f"Saved to : {out}\n"
+                        f"Size     : {size:,} bytes\n\n"
+                        f"Now LOOK at it before using it — read the file, or build an HTML "
+                        f"preview at the size it will actually be displayed.")
+
+    # No image came back. Say WHY, and surface any text the model returned instead
+    # of reporting a bare failure (a swallowed reason is worse than an error).
+    reason = ""
+    try:
+        c0 = (response.candidates or [None])[0]
+        if c0 is not None:
+            reason = f" finish_reason={getattr(c0, 'finish_reason', None)}"
+            for part in (c0.content.parts if c0.content else []):
+                if getattr(part, "text", None):
+                    reason += f" | model said: {part.text[:300]}"
+    except Exception:
+        pass
+    fb = getattr(response, "prompt_feedback", None)
+    if fb:
+        reason += f" | prompt_feedback={fb}"
+    return (f"❌ {model_id} returned no image.{reason}\n"
+            f"Common cause: the prompt was refused, or the model id does not support "
+            f"image output. Try model='pro' or rephrase the prompt.")
+
 
 @mcp.tool()
 def ask_gemini(prompt: str, temperature: float = 0.5) -> str:
