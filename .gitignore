@@ -49,3 +49,8 @@ research_reports/
 
 # local pre-edit backups
 *.bak.*
+
+# Local research databases
+*.db
+*.db-shm
+*.db-wal

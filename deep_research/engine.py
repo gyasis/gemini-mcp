@@ -2,7 +2,7 @@
 DeepResearchEngine - Wraps Gemini Deep Research Interactions API.
 
 Uses the Interactions API (NOT generateContent) for deep research.
-Model: deep-research-pro-preview-12-2025 (December 2025 release)
+Model: deep-research-preview-04-2026 (April 2026 release; 12-2025 deprecated after 2026-10-22)
 
 Features:
 - Streaming support with thinking summaries for real-time progress
@@ -33,7 +33,7 @@ class DeepResearchEngine:
 
     # Deep Research model - December 2025 release
     # Uses Interactions API, NOT generateContent
-    DEFAULT_MODEL = "deep-research-pro-preview-12-2025"
+    DEFAULT_MODEL = "deep-research-preview-04-2026"
 
     # Timeout before returning async handle (30 seconds per spec)
     SYNC_TIMEOUT_SECONDS = 30
@@ -80,7 +80,7 @@ class DeepResearchEngine:
 
         Args:
             query: The research question/topic
-            model: Optional model override (defaults to deep-research-pro-preview-12-2025)
+            model: Optional model override (defaults to deep-research-preview-04-2026)
 
         Returns:
             Dict with interaction_id, status, and initial response info
@@ -581,11 +581,11 @@ class DeepResearchEngine:
 
     def _extract_report_and_sources(self, interaction):
         """Extract (report_text, [Source]) from an Interaction (new 'steps' schema)."""
-        # Report text: prefer the convenience aggregate, else concat model_output text.
+        # Report text: concat every model_output part. `output_text` holds only the LAST
+        # part, and a long report arrives split across several (2026-10-19: a 35K report
+        # came back as 10.9K + 24.2K; output_text returned the 24.2K tail alone).
         text_items = list(self._iter_model_output_text(interaction))
-        report_text = getattr(interaction, 'output_text', None) or ""
-        if not report_text and text_items:
-            report_text = "\n".join(i.text for i in text_items if getattr(i, 'text', None))
+        report_text = "".join(i.text for i in text_items) or getattr(interaction, 'output_text', None) or ""
 
         # Sources: URL citations carried in each TextContent's annotations.
         sources: List[Source] = []
