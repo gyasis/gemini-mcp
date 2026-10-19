@@ -442,7 +442,7 @@ async def start_deep_research(
     query: str,
     enable_notifications: bool = True,
     max_wait_hours: int = 8,
-    model: str = "deep-research-pro-preview-12-2025",
+    model: str = "deep-research-preview-04-2026",
 ) -> Dict[str, Any]:
     """Start a deep research task using Gemini Deep Research API.
 
@@ -485,7 +485,7 @@ async def start_deep_research(
         query: Research question or topic to investigate (3-10000 chars).
         enable_notifications: Send desktop notification on completion (default: True)
         max_wait_hours: Maximum hours for background polling (1-24, default: 8)
-        model: Gemini model for research (default: deep-research-pro-preview-12-2025)
+        model: Gemini model for research (default: deep-research-preview-04-2026)
 
     Returns:
         Dict with task_id and status. Use check_research_status or

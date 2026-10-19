@@ -87,7 +87,7 @@ class ResearchTask:
 
     # Request
     query: str = ""                       # Original research question
-    model: str = "deep-research-pro-preview-12-2025"
+    model: str = "deep-research-preview-04-2026"
 
     # Status
     status: TaskStatus = TaskStatus.PENDING
