@@ -247,6 +247,8 @@ def is_yt(u):
 def cmd_video_watch(a):
     c, cleanup = client(), None
     if a.file_uri:
+        if a.input and not a.prompt:  # with --file-uri the lone positional is the question
+            a.prompt = a.input
         fi = call(c.files.get, name=a.file_uri)
         if enum_s(fi.state) != "active":
             raise Fail(f"{a.file_uri} not ready (state {fi.state}); see `gemini files status {a.file_uri}`")
@@ -263,7 +265,7 @@ def cmd_video_watch(a):
         if not mime or not mime.startswith("video/"):
             raise Fail(f"{p} is not a video file (type {mime})")
         mb = p.stat().st_size / 1048576
-        if mb <= 20:
+        if mb <= 20 and not a.upload_only:
             part, label = types.Part.from_bytes(data=p.read_bytes(), mime_type=mime), f"{p.name} {mb:.1f}MB inline"
         else:
             up = call(c.files.upload, file=str(p), config=types.UploadFileConfig(display_name=p.name))
@@ -524,6 +526,16 @@ def cmd_r_get(a):
     emit(a, json.dumps({"id": iid, "report": path, **s}), id=iid, report=path, **s)
 
 
+def notify(a, msg):
+    """Desktop notification for `research wait --notify` (the MCP's enable_notifications)."""
+    if not a.notify:
+        return
+    try:
+        subprocess.run(["notify-send", "gemini research", msg], timeout=10, check=True)
+    except Exception as e:
+        print(f"notify-send failed: {e}", file=sys.stderr)
+
+
 def cmd_r_wait(a):
     c = db()
     row = find_job(c, a.id)
@@ -538,9 +550,11 @@ def cmd_r_wait(a):
             _, _, saved = refresh(c, iid)  # keep whatever exists
             c.execute("UPDATE jobs SET error=? WHERE interaction_id=?", (f"cancelled by CLI at {a.max_min} min cap", iid))
             c.commit()
+            notify(a, f"cancelled at the {a.max_min:g}-min cap: {iid[:16]}")
             raise Fail(f"cancelled on Google after {s['elapsed_min']} min (cap {a.max_min}); partial report saved: {saved}")
         time.sleep(a.interval)
     path = write_report_file(c, iid, a.out)
+    notify(a, f"{s['status']} after {s['elapsed_min']} min: {iid[:16]}")
     if s["status"] != "completed":
         raise Fail(f"ended with status {s['status']}" + (f"; partial report at {path}" if path else ""))
     emit(a, json.dumps({"id": iid, "report": path, **s}), id=iid, report=path, **s)
@@ -764,6 +778,7 @@ def build():
     x = leaf(rs, "wait", cmd_r_wait, "poll to a terminal state; at the cap it CANCELS on Google and saves partial text")
     x.add_argument("id", help=idh); x.add_argument("--max-min", type=float, default=65); x.add_argument("--interval", type=int, default=30)
     x.add_argument("--out", help="report file path")
+    x.add_argument("--notify", action="store_true", help="desktop notification (notify-send) when it ends")
     x = leaf(rs, "get", cmd_r_get, "get_research_results: save report to DB and a file, print the path")
     x.add_argument("id", help=idh); x.add_argument("--out", help="report path (default ~/.local/share/gemini-cli/reports/<tail>.md)")
     x = leaf(rs, "cancel", cmd_r_cancel, "cancel_research: cancel on Google, save partial text"); x.add_argument("id", help=idh)
